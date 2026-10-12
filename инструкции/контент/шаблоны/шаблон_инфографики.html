@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Шаблон инфографики ALISAFOX</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ===== ТОКЕНЫ ALISAFOX v1 (2026-10-11) ===== */
+:root{
+  --bg-top:#F3F9FE;      /* верх фона, почти белый */
+  --bg-base:#DCEEFB;     /* основной нежно-голубой */
+  --bg-deep:#BFDDF6;     /* край фона, глубина */
+  --blue:#1A63D8;        /* плашки, акцентная цифра, значки */
+  --blue-light:#4C95F2;  /* верх градиента плашки и значка */
+  --ink:#101828;         /* заголовки и основной текст */
+  --ink-2:#3A4A63;       /* подписи и сноски */
+  --white:#FFFFFF;
+  --card:rgba(255,255,255,.80);
+  --shadow:0 16px 40px rgba(26,99,216,.16);
+  --page:#EEF3F8;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);font-family:Inter,system-ui,sans-serif;color:var(--ink);padding:40px 16px 80px}
+.intro{max-width:1100px;margin:0 auto 32px}
+.intro h1{font:700 40px Oswald,sans-serif;text-transform:uppercase}
+.intro p{font-size:16px;line-height:1.5;color:var(--ink-2);margin-top:8px;max-width:820px}
+.tokens{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+.tok{display:flex;align-items:center;gap:8px;background:#fff;border-radius:12px;padding:8px 12px;font-size:13px}
+.tok i{width:26px;height:26px;border-radius:8px;border:1px solid rgba(0,0,0,.08)}
+.toggle{margin-top:16px;font-size:14px}
+.grid{display:flex;flex-wrap:wrap;gap:32px;justify-content:center}
+.frame{width:450px}
+.frame .scaler{width:450px;height:600px;overflow:hidden;border-radius:16px;box-shadow:0 8px 24px rgba(16,24,40,.12)}
+.frame .scaler .slide{transform:scale(.5);transform-origin:0 0}
+.cap{margin-top:12px;font-size:14px;line-height:1.45;color:var(--ink-2)}
+.cap b{color:var(--ink)}
+@media (max-width:500px){.frame{width:100%}.frame .scaler{width:300px;height:400px;margin:0 auto}.frame .scaler .slide{transform:scale(.3333)}}
+
+/* ===== СЛАЙД 900×1200 ===== */
+.slide{position:relative;width:900px;height:1200px;overflow:hidden;color:var(--ink);
+  background:
+    radial-gradient(ellipse 60% 38% at 80% 14%, rgba(255,255,255,.95), rgba(255,255,255,0) 70%),
+    radial-gradient(ellipse 55% 35% at 12% 88%, rgba(255,255,255,.55), rgba(255,255,255,0) 70%),
+    linear-gradient(165deg,var(--bg-top) 0%,var(--bg-base) 48%,var(--bg-deep) 100%);}
+.slide .bokeh{position:absolute;border-radius:50%;background:rgba(255,255,255,.45);filter:blur(18px)}
+.logo{position:absolute;left:60px;top:140px;font:600 40px Inter,sans-serif;letter-spacing:.03em;color:var(--ink);z-index:5}
+.logo sup{font-size:18px;vertical-align:28px;margin-left:2px}
+.h1{position:absolute;left:60px;right:60px;font-family:Oswald,sans-serif;font-weight:700;text-transform:uppercase;line-height:.95;font-size:140px;color:var(--ink);z-index:5}
+.h1 .a{color:var(--blue)}
+.h1.m{font-size:110px}
+.plaque{position:absolute;left:60px;display:inline-flex;align-items:center;gap:18px;color:#fff;border-radius:28px;padding:10px 34px 14px;
+  background:linear-gradient(180deg,var(--blue-light) -40%,var(--blue) 60%);font:600 60px Oswald,sans-serif;text-transform:uppercase;line-height:1.05;
+  box-shadow:0 14px 30px rgba(26,99,216,.32);z-index:6}
+.plaque svg{width:56px;height:56px}
+.pill{position:absolute;background:#fff;border-radius:999px;padding:14px 32px;font:700 40px Inter,sans-serif;color:var(--ink);box-shadow:var(--shadow);z-index:7;white-space:nowrap}
+.dot{position:absolute;width:30px;height:30px;border-radius:50%;background:var(--blue);border:6px solid #fff;box-shadow:0 4px 10px rgba(26,99,216,.35);z-index:7}
+.lead{position:absolute;inset:0;z-index:6;pointer-events:none}
+.lead path{stroke:var(--blue);stroke-width:4;fill:none;stroke-linecap:round}
+.card{position:absolute;background:var(--card);border:2px solid rgba(255,255,255,.95);border-radius:32px;box-shadow:var(--shadow);z-index:5}
+.ico{width:100px;height:100px;border-radius:50%;display:grid;place-items:center;flex:none;
+  background:radial-gradient(circle at 32% 28%,var(--blue-light),var(--blue) 70%);box-shadow:0 10px 22px rgba(26,99,216,.35)}
+.ico svg{width:54px;height:54px}
+.ico.s{width:76px;height:76px}.ico.s svg{width:40px;height:40px}
+.ico.o{background:#fff;box-shadow:none;border:4px solid var(--blue)}
+.ico.o svg{stroke:var(--blue)}
+.ct{font:600 46px Oswald,sans-serif;text-transform:uppercase;line-height:1.05}
+.cs{font:500 34px Inter,sans-serif;color:var(--ink-2);line-height:1.2;margin-top:6px}
+.foot{position:absolute;left:60px;right:60px;bottom:44px;font:500 22px Inter,sans-serif;color:var(--ink-2);z-index:8}
+.ph{position:absolute;border:4px dashed rgba(26,99,216,.55);border-radius:40px;z-index:3;display:grid;place-items:center;text-align:center;
+  background:repeating-linear-gradient(135deg,rgba(255,255,255,.42) 0 18px,rgba(255,255,255,.14) 18px 36px);color:var(--blue);font:800 34px Inter,sans-serif;line-height:1.3}
+.ph small{display:block;font:600 24px Inter,sans-serif;color:var(--ink-2)}
+.ph.scene{border-radius:0;border-color:rgba(58,74,99,.35);color:var(--ink-2);background:repeating-linear-gradient(135deg,rgba(255,255,255,.22) 0 22px,rgba(255,255,255,.06) 22px 44px)}
+/* направляющие шаблона: в готовом слайде их нет */
+.guides .safe{position:absolute;left:0;right:0;top:0;height:130px;z-index:20;border-bottom:3px dashed rgba(26,99,216,.6);
+  background:repeating-linear-gradient(45deg,rgba(26,99,216,.10) 0 12px,rgba(26,99,216,0) 12px 24px);
+  font:700 22px Inter,sans-serif;color:var(--blue);display:flex;align-items:flex-end;justify-content:center;padding-bottom:8px}
+.guides .margin{position:absolute;left:60px;right:60px;top:0;bottom:0;border-left:2px dotted rgba(26,99,216,.35);border-right:2px dotted rgba(26,99,216,.35);z-index:19;pointer-events:none}
+body:not(.guides) .safe,body:not(.guides) .margin{display:none}
+svg.i{fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+</style>
+</head>
+<body class="guides">
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="phone" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M11 18.2h2"/></symbol>
+  <symbol id="laptop" viewBox="0 0 24 24"><rect x="4.5" y="5" width="15" height="10.5" rx="1.2"/><path d="M2.5 19h19"/></symbol>
+  <symbol id="camera" viewBox="0 0 24 24"><rect x="3" y="7.5" width="18" height="12.5" rx="2.2"/><circle cx="12" cy="13.7" r="3.4"/><path d="M8.5 7.5 10 4.5h4l1.5 3"/></symbol>
+  <symbol id="check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="cross" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17"/></symbol>
+  <symbol id="cond" viewBox="0 0 24 24"><path d="M12 6.5v7"/><path d="M12 17.3v.2"/></symbol>
+  <symbol id="gauge" viewBox="0 0 24 24"><path d="M4 16.5a8 8 0 1 1 16 0"/><path d="M12 16.5l4-5"/></symbol>
+  <symbol id="box" viewBox="0 0 24 24"><path d="M3.5 7.5 12 3.5l8.5 4v9L12 20.5l-8.5-4z"/><path d="M3.5 7.5 12 11.5l8.5-4M12 11.5v9"/></symbol>
+  <symbol id="card" viewBox="0 0 24 24"><path d="M7 3h7.5L18 6.5V21H7z"/><path d="M10 3v4M12.5 3v4M15 4v3"/></symbol>
+  <symbol id="star" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.8z"/></symbol>
+  <symbol id="arrow" viewBox="0 0 24 24"><path d="M4 12h15M14 7l5 5-5 5"/></symbol>
+</svg>
+
+<div class="intro">
+  <h1>Шаблон инфографики ALISAFOX · v1</h1>
+  <p>Формат 3:4, 900×1200 px (для Ozon можно экспортировать 1200×1600 с тем же соотношением). Пунктирные зоны «ТОВАР» заполняются только реальной съёмкой с референса, разъёмы сверяются 1:1. Тексты на слайдах — пример для картридера ALISAFOX; цифры перед запуском сверить с паспортом. Полосатая полоса сверху — безопасная зона Ozon: там встают плашки «Похожие» и «Новинка», текст туда не ставим.</p>
+  <div class="tokens">
+    <span class="tok"><i style="background:#F3F9FE"></i>#F3F9FE верх фона</span>
+    <span class="tok"><i style="background:#DCEEFB"></i>#DCEEFB основной голубой</span>
+    <span class="tok"><i style="background:#BFDDF6"></i>#BFDDF6 глубина фона</span>
+    <span class="tok"><i style="background:#4C95F2"></i>#4C95F2 блик плашки</span>
+    <span class="tok"><i style="background:#1A63D8"></i>#1A63D8 синий акцент</span>
+    <span class="tok"><i style="background:#101828"></i>#101828 текст</span>
+    <span class="tok"><i style="background:#3A4A63"></i>#3A4A63 подписи</span>
+  </div>
+  <label class="toggle"><input type="checkbox" checked onchange="document.body.classList.toggle('guides',this.checked)"> показать направляющие</label>
+</div>
+
+<div class="grid">
+
+<!-- 01 ГЛАВНОЕ ФОТО -->
+<div class="frame"><div class="scaler"><div class="slide" id="s01">
+  <div class="safe">безопасная зона Ozon · 130 px</div><div class="margin"></div>
+  <div class="bokeh" style="width:260px;height:260px;right:-40px;top:160px"></div>
+  <div class="logo">ALISAFOX<sup>®</sup></div>
+  <div class="h1" style="top:200px">Картридер<br><span class="a">3 в 1</span></div>
+  <div class="plaque" style="top:490px">Фото с камеры на телефон</div>
+  <div class="ph" style="left:30px;right:30px;top:610px;height:560px">ТОВАР КРУПНО · 50–60% КАДРА<small>только с референса · разъёмы 1:1 · мягкая тень</small></div>
+  <div class="pill" style="left:60px;top:1060px">SD · microSD · USB</div>
+</div></div>
+<p class="cap"><b>01 · Главное фото.</b> Задача: клик. Логотип, заголовок до 5 слов, одна плашка, одна выноска. Всего 3 надписи.</p></div>
+
+<!-- 02 ПРОБЛЕМА → РЕШЕНИЕ -->
+<div class="frame"><div class="scaler"><div class="slide" id="s02">
+  <div class="safe">безопасная зона Ozon · 130 px</div><div class="margin"></div>
+  <div class="h1 m" style="top:160px">Память<br><span class="a">забита?</span></div>
+  <div class="ph scene" style="left:60px;top:430px;width:375px;height:560px;border-radius:32px">ДО<small>проблема: сцена<br>размыта, фото/ИИ-фон</small></div>
+  <div class="ph" style="left:465px;top:430px;width:375px;height:560px">ПОСЛЕ<small>товар с референса<br>в работе</small></div>
+  <div class="ico s" style="position:absolute;left:412px;top:672px;z-index:8"><svg class="i"><use href="#arrow"/></svg></div>
+  <div class="pill" style="left:60px;top:1030px;font-size:36px">Фото застряли на карте</div>
+  <div class="pill" style="right:60px;top:1100px;font-size:36px;background:var(--blue);color:#fff">Перенесли на телефон</div>
+</div></div>
+<p class="cap"><b>02 · Проблема → решение.</b> Слева боль покупателя, справа товар её решает. Заголовок-вопрос и две подписи.</p></div>
+
+<!-- 03 СОВМЕСТИМОСТЬ -->
+<div class="frame"><div class="scaler"><div class="slide" id="s03">
+  <div class="safe">безопасная зона Ozon · 130 px</div><div class="margin"></div>
+  <div class="h1 m" style="top:160px">Подойдёт <span class="a">ли?</span></div>
+  <div class="card" style="left:60px;right:60px;top:320px;height:700px;padding:36px 40px;display:flex;flex-direction:column;gap:22px">
+    <div style="display:flex;align-items:center;gap:28px"><div class="ico s"><svg class="i"><use href="#check"/></svg></div><div><div class="ct">Телефоны на Android</div><div class="cs">с поддержкой OTG</div></div></div>
+    <div style="height:2px;background:rgba(26,99,216,.15)"></div>
+    <div style="display:flex;align-items:center;gap:28px"><div class="ico s"><svg class="i"><use href="#check"/></svg></div><div><div class="ct">Ноутбуки и ПК</div><div class="cs">с разъёмом [тип — из паспорта]</div></div></div>
+    <div style="height:2px;background:rgba(26,99,216,.15)"></div>
+    <div style="display:flex;align-items:center;gap:28px"><div class="ico s o"><svg class="i"><use href="#cond"/></svg></div><div><div class="ct">iPhone</div><div class="cs">[нужно подтвердить по паспорту]</div></div></div>
+    <div style="height:2px;background:rgba(26,99,216,.15)"></div>
+    <div style="display:flex;align-items:center;gap:28px"><div class="ico s o"><svg class="i"><use href="#cross"/></svg></div><div><div class="ct">Не подойдёт</div><div class="cs">телефон без OTG</div></div></div>
+  </div>
+  <div class="foot">Как проверить OTG: Настройки → О телефоне, или спросите в вопросах</div>
+</div></div>
+<p class="cap"><b>03 · Совместимость.</b> Подходит / с условием / не подходит. Устройства только словами и нейтральными значками, без логотипов. Таблица считается одной надписью.</p></div>
+
+<!-- 04 КЛЮЧЕВАЯ ЦИФРА -->
+<div class="frame"><div class="scaler"><div class="slide" id="s04">
+  <div class="safe">безопасная зона Ozon · 130 px</div><div class="margin"></div>
+  <div class="h1" style="top:160px;font-size:190px;line-height:.9">До <span class="a">480</span><br><span style="font-size:120px">Мбит/с</span></div>
+  <div class="plaque" style="top:520px"><svg class="i" style="stroke:#fff"><use href="#gauge"/></svg>[Выгода из паспорта]</div>
+  <div class="ph" style="left:200px;right:30px;top:650px;height:480px">ТОВАР<small>ракурс на нужный разъём</small></div>
+  <div class="foot">Скорость зависит от карты памяти и возможностей устройства</div>
+</div></div>
+<p class="cap"><b>04 · Ключевая цифра.</b> Одна цифра крупно, синим. Под ней плашка: чем цифра полезна. Сноска-оговорка, если цифра зависит от устройств.</p></div>
+
+<!-- 05 РАЗЪЁМЫ / ВЫНОСКИ -->
+<div class="frame"><div class="scaler"><div class="slide" id="s05">
+  <div class="safe">безопасная зона Ozon · 130 px</div><div class="margin"></div>
+  <div class="h1 m" style="top:160px"><span class="a">3</span> разъёма</div>
+  <div class="ph" style="left:140px;right:140px;top:420px;height:560px"><span style="align-self:start;padding-top:30px">ТОВАР<small>порты к камере, сверить каждый 1:1</small></span></div>
+  <svg class="lead" viewBox="0 0 900 1200"><path d="M175 360 L300 560"/><path d="M745 360 L560 600"/><path d="M175 1060 L380 860"/></svg>
+  <div class="pill" style="left:60px;top:300px">SD</div>
+  <div class="pill" style="right:60px;top:300px">microSD</div>
+  <div class="pill" style="left:60px;top:1040px">USB-A</div>
+  <div class="dot" style="left:285px;top:545px"></div>
+  <div class="dot" style="left:545px;top:585px"></div>
+  <div class="dot" style="left:365px;top:845px"></div>
+</div></div>
+<p class="cap"><b>05 · Разъёмы с выносками.</b> Белые «таблетки» и синяя точка ровно на порту. Подписываем только то, что видно на референсе.</p></div>
+
+<!-- 06 ПОДКЛЮЧЕНИЕ -->
+<div class="frame"><div class="scaler"><div class="slide" id="s06">
+  <div class="safe">безопасная зона Ozon · 130 px</div><div class="margin"></div>
+  <div class="h1 m" style="top:170px;font-size:96px;white-space:nowrap">Как <span class="a">подключить</span></div>
+  <div class="card" style="left:60px;right:60px;top:320px;height:250px;display:flex;align-items:center;gap:30px;padding:0 36px">
+    <div class="ico" style="font:700 56px Oswald;color:#fff">1</div>
+    <div class="ph" style="position:relative;width:250px;height:190px;border-radius:24px;font-size:22px">кадр шага</div>
+    <div class="ct" style="flex:1">Вставьте в телефон</div></div>
+  <div class="card" style="left:60px;right:60px;top:600px;height:250px;display:flex;align-items:center;gap:30px;padding:0 36px">
+    <div class="ico" style="font:700 56px Oswald;color:#fff">2</div>
+    <div class="ph" style="position:relative;width:250px;height:190px;border-radius:24px;font-size:22px">кадр шага</div>
+    <div class="ct" style="flex:1">Вставьте карту</div></div>
+  <div class="card" style="left:60px;right:60px;top:880px;height:250px;display:flex;align-items:center;gap:30px;padding:0 36px">
+    <div class="ico" style="font:700 56px Oswald;color:#fff">3</div>
+    <div class="ph" style="position:relative;width:250px;height:190px;border-radius:24px;font-size:22px">кадр шага</div>
+    <div class="ct" style="flex:1">Откройте «Файлы»</div></div>
+</div></div>
+<p class="cap"><b>06 · Подключение.</b> 3–4 шага, на каждом реальный кадр руки с товаром и глагол в начале.</p></div>
+
+<!-- 07 В ИСПОЛЬЗОВАНИИ -->
+<div class="frame"><div class="scaler"><div class="slide" id="s07">
+  <div class="ph scene" style="inset:0;align-items:end;padding-bottom:40px">СЦЕНА НА ВЕСЬ КАДР<small>ИИ или фото, светлая, размытая,<br>в голубой гамме</small></div>
+  <div class="safe">безопасная зона Ozon · 130 px</div><div class="margin"></div>
+  <div class="ph" style="left:300px;right:60px;top:520px;height:420px">ТОВАР В РАБОТЕ<small>реальная съёмка</small></div>
+  <div class="h1 m" style="top:160px">Фото <span class="a">в дороге</span></div>
+  <div class="plaque" style="top:1010px">Сразу в телефон</div>
+</div></div>
+<p class="cap"><b>07 · В использовании.</b> Товар в реальной сцене. Сцену можно генерировать, товар нет.</p></div>
+
+<!-- 08 РАЗМЕРЫ -->
+<div class="frame"><div class="scaler"><div class="slide" id="s08">
+  <div class="safe">безопасная зона Ozon · 130 px</div><div class="margin"></div>
+  <div class="h1 m" style="top:160px">Размеры</div>
+  <div class="ph" style="left:120px;width:480px;top:440px;height:360px">ТОВАР<small>вид сверху, без перспективы</small></div>
+  <div class="ph scene" style="left:640px;width:180px;top:340px;height:560px;border-radius:32px;font-size:22px">масштаб<small>рука или телефон</small></div>
+  <svg class="lead" viewBox="0 0 900 1200"><path d="M120 860 H600 M120 845 V875 M600 845 V875"/><path d="M80 440 V800 M65 440 H95 M65 800 H95"/></svg>
+  <div class="pill" style="left:250px;top:890px">[__] мм</div>
+  <div class="pill" style="left:60px;top:560px;transform:rotate(-90deg) translateX(-50%);transform-origin:left top;padding:10px 24px;font-size:34px">[__] мм</div>
+  <div class="card" style="left:60px;right:60px;top:1010px;height:130px;display:flex;align-items:center;gap:26px;padding:0 30px">
+    <div class="ico s"><svg class="i"><use href="#arrow"/></svg></div><div class="ct" style="font-size:44px">Кабель [__] см</div></div>
+</div></div>
+<p class="cap"><b>08 · Размеры.</b> Габариты линиями, рядом предмет для масштаба. Длину кабеля пишем здесь и больше нигде.</p></div>
+
+<!-- 09 КОМПЛЕКТАЦИЯ -->
+<div class="frame"><div class="scaler"><div class="slide" id="s09">
+  <div class="safe">безопасная зона Ozon · 130 px</div><div class="margin"></div>
+  <div class="h1 m" style="top:160px">В <span class="a">коробке</span></div>
+  <div class="card" style="left:60px;width:375px;top:320px;height:620px;display:flex;flex-direction:column;align-items:center;padding:30px">
+    <div class="ph" style="position:relative;width:100%;height:420px;border-radius:24px;font-size:26px">ТОВАР</div>
+    <div class="ct" style="margin-top:28px">Картридер × 1</div></div>
+  <div class="card" style="right:60px;width:375px;top:320px;height:620px;display:flex;flex-direction:column;align-items:center;padding:30px">
+    <div class="ph" style="position:relative;width:100%;height:420px;border-radius:24px;font-size:26px">ПРЕДМЕТ</div>
+    <div class="ct" style="margin-top:28px">[из паспорта] × 1</div></div>
+  <div class="foot" style="bottom:120px;font-size:30px;color:var(--ink)">Карта памяти в комплект не входит</div>
+</div></div>
+<p class="cap"><b>09 · Комплектация.</b> Всё, что в коробке, по списку из паспорта. Отдельной строкой чего нет, чтобы не было возвратов.</p></div>
+
+<!-- 10 ПРЕИМУЩЕСТВА -->
+<div class="frame"><div class="scaler"><div class="slide" id="s10">
+  <div class="safe">безопасная зона Ozon · 130 px</div><div class="margin"></div>
+  <div class="logo">ALISAFOX<sup>®</sup></div>
+  <div class="h1 m" style="top:200px">Почему <span class="a">удобно</span></div>
+  <div class="ph" style="left:440px;right:30px;top:440px;height:330px">ТОВАР</div>
+  <div class="card" style="left:60px;right:60px;top:800px;height:340px;display:flex;justify-content:space-between;padding:30px 26px;gap:18px">
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;text-align:center"><div class="ico"><svg class="i"><use href="#star"/></svg></div><div class="ct" style="font-size:38px;margin-top:18px">[Факт 1]</div><div class="cs" style="font-size:28px">[выгода]</div></div>
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;text-align:center"><div class="ico"><svg class="i"><use href="#box"/></svg></div><div class="ct" style="font-size:38px;margin-top:18px">[Факт 2]</div><div class="cs" style="font-size:28px">[выгода]</div></div>
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;text-align:center"><div class="ico"><svg class="i"><use href="#card"/></svg></div><div class="ct" style="font-size:38px;margin-top:18px">[Факт 3]</div><div class="cs" style="font-size:28px">[выгода]</div></div>
+  </div>
+</div></div>
+<p class="cap"><b>10 · Три преимущества.</b> Только факты, которых нет на других слайдах. Факт сверху, выгода строкой ниже.</p></div>
+
+</div>
+</body>
+</html>
