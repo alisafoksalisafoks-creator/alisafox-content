@@ -16,6 +16,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
 from bot import cards, dashboard, restock, store
 from bot.category_report import MSK
 from bot.sources.ozon import OzonClient
