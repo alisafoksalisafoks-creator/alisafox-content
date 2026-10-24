@@ -59,8 +59,12 @@ class Catalog:
                 if r["cost"] <= 0 < item["cost"]:
                     r["cost"] = item["cost"]
 
+    @staticmethod
+    def root(offer_id):
+        return RELAUNCH.sub("", (offer_id or "").strip().upper())
+
     def get(self, offer_id):
-        return self.roots.get(RELAUNCH.sub("", (offer_id or "").strip().upper()))
+        return self.roots.get(self.root(offer_id))
 
     def anomalies(self):
         """Позиции с отрицательным остатком или себестоимостью — прибыль по ним неточна."""

@@ -5,6 +5,7 @@ from collections import defaultdict
 MIN_DAYS = 20      # запаса на складе должно хватать минимум на 20 дней
 TARGET_DAYS = 30   # грузим до этого запаса
 EXCESS_DAYS = 60   # дольше — перебор, долгая оборачиваемость
+MIN_NEED = 3       # потребность меньше 3 шт на склад не везём: поставка дороже продажи
 
 
 def cluster_stocks(oz, skus):
@@ -33,6 +34,7 @@ def plan(stocks):
             have = c["stock"] + c["transit"]
             days = have / c["ads"] if c["ads"] else None
             need = max(0, round(c["ads"] * TARGET_DAYS - have)) if c["ads"] else 0
+            need = need if need >= MIN_NEED else 0
             if days is not None and days < MIN_DAYS:
                 status = "urgent" if c["stock"] == 0 else "low"
             elif have and (days is None or days > EXCESS_DAYS):
@@ -77,3 +79,49 @@ def render_text(title, rows, limit=12):
     if not shown:
         lines.append("🟢 На всех складах запас в норме.")
     return "\n".join(lines)
+
+
+def allocate(rows, catalog):
+    """Делит свой остаток (МойСклад, корневой артикул) между складами Ozon: сначала туда, где запас кончится раньше.
+    need — полная потребность склада до 30 дней, ship — сколько везти из своего, order — не хватает, заказать."""
+    groups = defaultdict(list)
+    for r in rows:
+        r["ship"], r["order"] = 0, 0
+        if r["status"] in ("urgent", "low") and r["need"] > 0:
+            groups[catalog.root(r["offer_id"])].append(r)
+    for root, rs in groups.items():
+        left = int(max(0, (catalog.get(root) or {}).get("stock", 0)))
+        for r in sorted(rs, key=lambda r: (r["days"] or 0, -r["ads"])):
+            r["own"] = left
+            r["ship"] = min(r["need"], left)
+            r["order"] = r["need"] - r["ship"]
+            left -= r["ship"]
+    return rows
+
+
+def by_cluster(rows):
+    """Склады, куда пора везти: [{cluster, skus, need, ship}] по убыванию потребности."""
+    out = defaultdict(lambda: {"skus": 0, "need": 0, "ship": 0, "urgent": 0})
+    for r in rows:
+        if r["status"] in ("urgent", "low") and r["need"] > 0:
+            c = out[r["cluster"]]
+            c["skus"] += 1
+            c["need"] += r["need"]
+            c["ship"] += r["ship"]
+            c["urgent"] += r["status"] == "urgent"
+    return sorted(({"cluster": k, **v} for k, v in out.items()), key=lambda c: -c["need"])
+
+
+def by_sku(rows):
+    """Артикулы, которым нужна отгрузка: [{sku, offer_id, clusters, need, ship, days}].
+    Сначала те, что есть на своём складе (самые срочные выше), потом те, что надо заказывать у поставщика."""
+    out = {}
+    for r in rows:
+        if r["status"] in ("urgent", "low") and r["need"] > 0:
+            s = out.setdefault(r["sku"], {"sku": r["sku"], "offer_id": r["offer_id"], "name": r["name"],
+                                          "clusters": 0, "need": 0, "ship": 0, "days": 999})
+            s["clusters"] += 1
+            s["need"] += r["need"]
+            s["ship"] += r["ship"]
+            s["days"] = min(s["days"], r["days"] or 0)
+    return sorted(out.values(), key=lambda s: (not s["ship"], s["days"], -s["ship"], -s["need"]))
