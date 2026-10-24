@@ -67,12 +67,21 @@ def allowed(user_id):
     return not ALLOWED or user_id in ALLOWED
 
 
+async def send_sheets(bot: Bot, chats, render, caption, markup=None):
+    """render(prefix) рисует листы и возвращает пути; листы уходят альбомом, подпись с кнопками — следом."""
+    tmp = tempfile.mkdtemp()
+    try:
+        paths = await asyncio.to_thread(render, os.path.join(tmp, "sheet"))
+        album = [InputMediaPhoto(media=FSInputFile(p)) for p in paths]
+        for chat in chats:
+            await bot.send_media_group(chat, album)
+            await bot.send_message(chat, caption, reply_markup=markup)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 async def send_png(msg: Message, render, caption, markup=None):
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-        path = f.name
-    await asyncio.to_thread(render, path)
-    await msg.answer_photo(FSInputFile(path), caption=caption, reply_markup=markup)
-    os.unlink(path)
+    await send_sheets(msg.bot, [msg.chat.id], render, caption, markup)
 
 
 async def card(msg: Message, target, kind="week", compare=None):
@@ -134,23 +143,12 @@ async def restock_card(msg: Message, target=None):
                    f"Подгрузка: {title}", kb([[("⬅️ Меню", "menu")]]))
 
 
-def render_morning():
-    """Листы утренней сводки во временной папке: (папка, пути PNG)."""
-    m = morning.build(db, oz, data_day())
-    tmp = tempfile.mkdtemp()
-    return tmp, dashboard.morning_png(m, os.path.join(tmp, "morning"))
+def render_morning(prefix):
+    return dashboard.morning_png(morning.build(db, oz, data_day()), prefix)
 
 
 async def push_morning(bot: Bot, chats):
-    tmp, paths = await asyncio.to_thread(render_morning)
-    caption = f"Утренняя сводка Ozon за {data_day():%d.%m.%Y}"
-    album = [InputMediaPhoto(media=FSInputFile(p), caption=caption if i == 0 else None) for i, p in enumerate(paths)]
-    try:
-        for chat in chats:
-            await bot.send_media_group(chat, album)
-            await bot.send_message(chat, "Что смотрим дальше?", reply_markup=MENU)
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    await send_sheets(bot, chats, render_morning, f"Утренняя сводка Ozon за {data_day():%d.%m.%Y}", MENU)
 
 
 async def morning_card(msg: Message):
