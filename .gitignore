@@ -2,3 +2,4 @@ bot/data.sqlite
 __pycache__/
 .env
 .venv/
+bot/costs_fallback.csv

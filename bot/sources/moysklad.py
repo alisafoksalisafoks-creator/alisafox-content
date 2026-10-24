@@ -7,6 +7,7 @@ import httpx
 BASE = "https://api.moysklad.ru/api/remap/1.2"
 # учёт в МоёмСкладе ведётся по корневому артикулу: OZ204NEW, OZ204NEW2 на Ozon = OZ204 на складе
 RELAUNCH = re.compile(r"NEW\d*$")
+DOUBLE = re.compile(r"^ДБ\s*")
 
 
 def _rows(http, path):
@@ -23,6 +24,27 @@ def _rows(http, path):
 
 def _key(row):
     return (row.get("article") or row.get("code") or "").strip().upper()
+
+
+FALLBACK = os.environ.get("COSTS_FILE", os.path.join(os.path.dirname(__file__), "..", "costs_fallback.csv"))
+
+
+def load_fallback(path=FALLBACK):
+    """Запасная себестоимость: CSV «артикул;себестоимость» из листа «Юнит экономика Алиса».
+    Файл не в git (репозиторий публичный), лежит рядом с ботом."""
+    out = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                key, _, cost = line.strip().partition(";")
+                try:
+                    if float(cost) > 0:
+                        out[key.strip().upper()] = float(cost)
+                except ValueError:
+                    pass
+    except FileNotFoundError:
+        pass
+    return out
 
 
 class Catalog:
@@ -59,9 +81,16 @@ class Catalog:
                 if r["cost"] <= 0 < item["cost"]:
                     r["cost"] = item["cost"]
 
+        # нет себестоимости в МоёмСкладе (старые артикулы) — берём из выгрузки таблицы юнит-экономики
+        for key, cost in load_fallback().items():
+            r = self.roots.setdefault(self.root(key), {"stock": 0, "in_transit": 0, "cost": 0, "variants": []})
+            if r["cost"] <= 0:
+                r["cost"], r["cost_from"] = cost, "таблица"
+
     @staticmethod
     def root(offer_id):
-        return RELAUNCH.sub("", (offer_id or "").strip().upper())
+        """OZ204NEW2 → OZ204; «ДБ OZ378V» (дубль карточки) → OZ378V."""
+        return RELAUNCH.sub("", DOUBLE.sub("", (offer_id or "").strip().upper()))
 
     def get(self, offer_id):
         return self.roots.get(self.root(offer_id))
