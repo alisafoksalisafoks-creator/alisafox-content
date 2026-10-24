@@ -7,6 +7,7 @@ import httpx
 BASE = "https://api.moysklad.ru/api/remap/1.2"
 # учёт в МоёмСкладе ведётся по корневому артикулу: OZ204NEW, OZ204NEW2 на Ozon = OZ204 на складе
 RELAUNCH = re.compile(r"NEW\d*$")
+DOUBLE = re.compile(r"^ДБ\s*")
 
 
 def _rows(http, path):
@@ -61,7 +62,8 @@ class Catalog:
 
     @staticmethod
     def root(offer_id):
-        return RELAUNCH.sub("", (offer_id or "").strip().upper())
+        """OZ204NEW2 → OZ204; «ДБ OZ378V» (дубль карточки) → OZ378V."""
+        return RELAUNCH.sub("", DOUBLE.sub("", (offer_id or "").strip().upper()))
 
     def get(self, offer_id):
         return self.roots.get(self.root(offer_id))
