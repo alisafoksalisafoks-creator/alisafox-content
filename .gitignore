@@ -1,0 +1,3 @@
+bot/data.sqlite
+__pycache__/
+.env

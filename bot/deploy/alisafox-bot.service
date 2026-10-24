@@ -1,0 +1,16 @@
+[Unit]
+Description=AlisaFox analytics Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/alisafox-content
+EnvironmentFile=/opt/alisafox-content/.env
+ExecStart=/opt/alisafox-content/.venv/bin/python -m bot.app
+# упал — перезапуск через 10 секунд, без ограничения числа попыток
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
