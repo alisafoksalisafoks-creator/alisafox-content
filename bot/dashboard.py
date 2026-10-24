@@ -198,23 +198,24 @@ def card_png(title, data, prefix, top_rows=None):
     return paths
 
 
+ORDER_HINT = "рекомендую к заказу"
 SUPPLY_COLS = [(0.05, "", "left"), (0.50, "есть", "right"), (0.62, "дней", "right"), (0.77, "нужно", "right"),
                (0.95, "везти", "right")]
 
 
-def supply_row(r, label, sub):
+def supply_row(r, label, sub, hint=True):
     """Строка «грузить»: полная потребность склада и сколько везти из своего остатка."""
     col = BAD if r["status"] == "urgent" else WARN
     d = f"{r['days']:.0f}" if r["days"] is not None else "—"
     ship = r.get("ship", r["need"])
-    act = (f"{num(ship)} шт", INK, True) if ship else ("заказать", BAD, True)
-    if r.get("order") and ship:
-        sub = f"{sub} · своего не хватает, заказать ещё {num(r['order'])}"
+    act = (f"{num(ship)} шт", INK, True) if ship else ("своего нет", MUTED, True)
+    if hint and r.get("order") and (r.get("profit") or 0) > 0:
+        sub = f"{sub} · {ORDER_HINT}"
     return ([(label, col, True), (num(r["stock"] + r["transit"]), INK, False), (d, col, True),
              (num(r["need"]), INK, False), act], sub)
 
 
-def excess_row(r, label, sub):
+def excess_row(r, label, sub, hint=True):
     d = f"{r['days']:.0f}" if r["days"] is not None else "—"
     return ([(label, EXCESS, True), (num(r["stock"] + r["transit"]), INK, False), (d, EXCESS, True),
              None, (f"лишние ~{num(r['excess'])}", EXCESS, True)], sub)
@@ -229,7 +230,7 @@ def supply_png(title, subtitle, rows, prefix, by="offer", tiles=None, per_sheet=
 
     def fmt(r, fn):
         if by == "cluster":
-            return fn(r, f"● {short(r['cluster'], 22)}", f"продаёт {r['ads']:.1f} шт/день")
+            return fn(r, f"● {short(r['cluster'], 22)}", f"продаёт {r['ads']:.1f} шт/день", hint=False)
         return fn(r, r["offer_id"], short(r["name"], 48))
 
     chunks = [load[i:i + per_sheet] for i in range(0, len(load), per_sheet)][:max_sheets] or [[]]
@@ -248,9 +249,9 @@ def supply_png(title, subtitle, rows, prefix, by="offer", tiles=None, per_sheet=
             p.table("Перебор: больше 60 дней", cols, [fmt(r, excess_row) for r in excess])
         more = len(load) - per_sheet * max_sheets
         _save(p, prefix, paths, ("Есть — на складе Ozon с учётом пути. Нужно — до 30 дней продаж. "
-                                 "Везти — из своего остатка (МойСклад).")
-              + (f"\nЕщё {more} строк не поместились — смотрите по артикулу." if last and more > 0 else
-                 "\nСвой остаток делится между складами: сначала туда, где кончится раньше."))
+                                 "Везти — из своего остатка\n(МойСклад), сначала туда, где кончится раньше. "
+                                 f"«{ORDER_HINT}» — своего мало,\nа товар в чистой прибыли за 2 месяца.")
+              + (f"\nЕщё {more} строк не поместились — смотрите по артикулу." if last and more > 0 else ""))
     return paths
 
 
@@ -273,8 +274,8 @@ def restock_png(title, rows, summary, prefix, limit=8):
     ])
     p.table("Запаса меньше 20 дней", cols, [supply_row(r, *label(r)) for r in load]
             or [([("● везде норма", GOOD, True), None, None, None, None], "")])
-    _save(p, prefix, paths, "Нужно — до 30 дней продаж на складе. Везти — из своего остатка (МойСклад),\n"
-          "он делится между складами: сначала туда, где кончится раньше.")
+    _save(p, prefix, paths, "Нужно — до 30 дней продаж. Везти — из своего остатка (МойСклад), сначала туда,\n"
+          f"где кончится раньше. «{ORDER_HINT}» — своего мало, а товар в прибыли за 2 мес.")
     p = Page(0.35 + 0.78 + 1.0 + 0.42 * max(1, len(excess)) + 0.7, SHEET_W)
     p.header("2/2 · Перебор", f"Подгрузка: {title} · перебор > 60 дн")
     p.table("Оборачиваемость больше 60 дней", cols, [excess_row(r, *label(r)) for r in excess]
@@ -363,10 +364,11 @@ def morning_png(m, prefix):
     rows = []
     for x in ending:
         own = (m["ms"].get(x["offer_id"]) or {}).get("stock", 0)
+        good = (m.get("profits", {}).get(str(x.get("sku"))) or {}).get("profit", 0) > 0
         rows.append(([(x["offer_id"], INK, True), (num(x["current_stock"]), INK, False), (f"{x['ads']:.1f}", INK, False),
                       (f"{x['idc']:.0f} дн", BAD, True),
-                      (f"{num(own)} шт" if own > 0 else "0 — заказать", INK if own > 0 else BAD, True)],
-                     short(x["name"], 48)))
+                      (f"{num(own)} шт", INK, True) if own > 0 else ("0", BAD, True)],
+                     short(x["name"], 48) if own > 0 or not good else f"{short(x['name'], 34)} · {ORDER_HINT}"))
     p.table(f"Скоро закончится: меньше 20 дней ({len(m['ending'])} SKU)", cols,
             rows or [([("● всё в норме", GOOD, True), None, None, None, None], "")])
     cols = [(0.05, "Товар", "left"), (0.58, "остаток", "right"), (0.76, "в день", "right"), (0.95, "оборач.", "right")]
@@ -374,7 +376,8 @@ def morning_png(m, prefix):
               (f"{x['turnover']:.0f} дн", EXCESS, True)], short(x["name"], 48)) for x in excess]
     p.table(f"Платное хранение: красных {len(m['excess'])}, скоро {len(m['soon'])} SKU", cols,
             rows or [([("● перебора нет", GOOD, True), None, None, None], "")])
-    done(p, "Полный список по складам — кнопка «Что подгрузить» в меню.\nСвой склад — остаток корневого артикула в МоёмСкладе.")
+    done(p, "Полный список по складам — кнопка «Поставки» в меню. Свой склад — МойСклад.\n"
+         f"«{ORDER_HINT}» — своего нет, а товар в чистой прибыли с 1-го числа прошлого месяца.")
 
     # 4. Рейтинг и МойСклад
     n_drops = 1 if not drops else len(drops[:6])
