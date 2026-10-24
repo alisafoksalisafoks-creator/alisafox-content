@@ -162,41 +162,53 @@ class Page:
         plt.close(self.fig)
 
 
-def card_png(title, data, path, top_rows=None):
-    """Сценарий 2 и карточка категории: плитки, график, (топ товаров), воронка."""
-    h = 0.35 + 0.78 + 2 * 1.0 + 3.0 + (0.9 + 0.42 * len(top_rows) if top_rows else 0) + 0.7 + 0.62 * 5 + 0.5
-    p = Page(h)
-    p.header(title, f"Ozon · {data['label']}")
-    p.tiles(data["tiles"])
-    p.line(data["series"], data["series_prev"], data["span"])
-    if top_rows:
-        cols = [(0.05, "Товар", "left"), (0.66, "шт", "right"), (0.80, "к прошлому", "right"),
-                (0.95, "остаток", "right")]
-        p.table(f"Топ-{len(top_rows)} товаров", cols, top_rows)
-    p.funnel(data["funnel"])
-    p.footer("▲ лучше · ▼ хуже · ≈ изменение меньше 5%. Источник: Ozon Seller API.\n"
-             "«Доставлено» — доставки за период, в том числе по заказам прошлых периодов.")
+SHEET_W = 6.2  # уже обычной страницы: в телефоне шрифт выходит крупнее
+
+
+def _save(p, prefix, paths, note):
+    p.footer(note)
+    path = f"{prefix}_{len(paths) + 1}.png"
     p.save(path)
+    paths.append(path)
 
 
-def restock_png(title, rows, summary, path, limit=8, catalog=None):
+def card_png(title, data, prefix, top_rows=None):
+    """Сценарий 2 и карточка категории: листы «показатели», «топ товаров», «воронка». Возвращает пути PNG."""
+    paths, n = [], 3 if top_rows else 2
+    head, _, rest = title.partition(" · ")  # у артикула: «OZ… · название» — название уходит в подзаголовок
+    sub = short(f"{rest} · {data['label']}", 64) if rest else data["label"]
+    legend = "▲ лучше · ▼ хуже · ≈ изменение меньше 5%. Источник: Ozon Seller API."
+    p = Page(0.35 + 0.78 + 3 * 1.0 + 3.0 + 0.7, SHEET_W)
+    p.header(f"1/{n} · {short(head, 30)}", f"Ozon · {sub}")
+    p.tiles(data["tiles"], per_row=2)
+    p.line(data["series"], data["series_prev"], data["span"])
+    _save(p, prefix, paths, legend)
+    if top_rows:
+        p = Page(0.35 + 0.78 + 1.0 + 0.42 * len(top_rows) + 0.7, SHEET_W)
+        p.header(f"2/{n} · Топ-{len(top_rows)} товаров", f"{short(head, 30)} · {sub}")
+        cols = [(0.05, "Товар", "left"), (0.60, "шт", "right"), (0.78, "к прошл.", "right"),
+                (0.95, "остаток", "right")]
+        p.table("Заказы за период и запас", cols, top_rows)
+        _save(p, prefix, paths, "Остаток в днях — по скорости продаж за 14 дней.\n"
+              "● красный < 20 дн · зелёный — норма · синий > 60 дн.")
+    p = Page(0.35 + 0.78 + 0.7 + 0.62 * len(data["funnel"]) + 0.7, SHEET_W)
+    p.header(f"{n}/{n} · Воронка", f"{short(head, 30)} · {sub}")
+    p.funnel(data["funnel"])
+    _save(p, prefix, paths, legend + "\n«Доставлено» — доставки за период, в том числе по прошлым заказам.")
+    return paths
+
+
+def restock_png(title, rows, summary, prefix, limit=8, catalog=None):
+    """Сценарий 3: листы «грузить» и «перебор». Возвращает пути PNG."""
     load = [r for r in rows if r["status"] in ("urgent", "low")][:limit]
     excess = sorted([r for r in rows if r["status"] == "excess"], key=lambda r: -r["excess"])[:limit]
-    h = 0.35 + 0.78 + 1.0 + 2 * 0.9 + 0.42 * (max(1, len(load)) + max(1, len(excess))) + 0.7
-    p = Page(h)
-    p.header(f"Подгрузка: {title}", "Ozon · норма на складе ≥ 20 дн, перебор > 60 дн")
-    p.tiles([
-        {"name": "Всего на Ozon, шт", "value": summary["stock"], "plain": True},
-        {"name": "Продажи в день, шт", "value": summary["ads"], "plain": True},
-        {"name": "Хватит на, дн", "value": summary["days"] or 0, "plain": True},
-    ])
-    cols = [(0.05, "Склад · товар", "left"), (0.58, "остаток", "right"), (0.71, "дней", "right"),
+    cols = [(0.05, "Склад · товар", "left"), (0.55, "остаток", "right"), (0.68, "дней", "right"),
             (0.95, "что сделать", "right")]
 
     def row(r, col, act):
         d = f"{r['days']:.0f}" if r["days"] is not None else "—"
-        return ([(f"● {r['cluster']}", col, True), (num(r["stock"] + r["transit"]), INK, False),
-                 (d, col, True), (act, INK, True)], f"{r['offer_id']} · {short(r['name'], 60)}")
+        return ([(f"● {short(r['cluster'], 20)}", col, True), (num(r["stock"] + r["transit"]), INK, False),
+                 (d, col, True), (act, INK, True)], f"{r['offer_id']} · {short(r['name'], 46)}")
 
     def load_act(r):
         if catalog is None:
@@ -204,22 +216,31 @@ def restock_png(title, rows, summary, path, limit=8, catalog=None):
         own = (catalog.get(r["offer_id"]) or {}).get("stock", 0)
         return f"везти {min(r['need'], own)} шт" if own > 0 else "своего 0 — заказать"
 
-    p.table("Грузить: запаса меньше 20 дней", cols,
+    paths = []
+    p = Page(0.35 + 0.78 + 1.0 + 1.0 + 0.42 * max(1, len(load)) + 0.7, SHEET_W)
+    p.header("1/2 · Грузить", f"Подгрузка: {title} · норма ≥ 20 дн")
+    p.tiles([
+        {"name": "Всего на Ozon, шт", "value": summary["stock"], "plain": True},
+        {"name": "Продажи в день, шт", "value": summary["ads"], "plain": True},
+        {"name": "Хватит на, дн", "value": summary["days"] or 0, "plain": True},
+    ])
+    p.table("Запаса меньше 20 дней", cols,
             [row(r, BAD if r["status"] == "urgent" else WARN, load_act(r)) for r in load]
             or [([("● везде норма", GOOD, True), None, None, None], "")])
-    p.table("Перебор: оборачиваемость больше 60 дней", cols,
+    _save(p, prefix, paths, "Остаток с учётом товара в пути. Свой склад — МойСклад.\n"
+          "Источник: Ozon Seller API, остатки по кластерам.")
+    p = Page(0.35 + 0.78 + 1.0 + 0.42 * max(1, len(excess)) + 0.7, SHEET_W)
+    p.header("2/2 · Перебор", f"Подгрузка: {title} · перебор > 60 дн")
+    p.table("Оборачиваемость больше 60 дней", cols,
             [row(r, EXCESS, f"лишние ~{r['excess']} шт") for r in excess]
             or [([("● перебора нет", GOOD, True), None, None, None], "")])
-    p.footer("Остаток с учётом товара в пути. Скорость по складу — средняя по данным Ozon. Свой склад — МойСклад.\n"
-             "Источник: Ozon Seller API, остатки по кластерам.")
-    p.save(path)
+    _save(p, prefix, paths, "Лишнее — сверх 60 дней продаж: вывезти или переместить.\n"
+          "Скорость по складу — средняя по данным Ozon.")
+    return paths
 
 
 def _chg(cur, old):
     return (cur - old) / abs(old) * 100 if old else None
-
-
-MORNING_W = 6.2  # уже обычной страницы: в телефоне шрифт выходит крупнее
 
 
 def morning_png(m, prefix):
@@ -236,15 +257,12 @@ def morning_png(m, prefix):
 
     def sheet(n, title, n_tables, n_rows, tiles=0):
         h = 0.35 + 0.78 + tiles * 1.0 + n_tables * 1.0 + 0.42 * n_rows + 0.7
-        p = Page(h, MORNING_W)
+        p = Page(h, SHEET_W)
         p.header(f"{n}/4 · {title}", f"Ozon за {day}")
         return p
 
     def done(p, note):
-        p.footer(note)
-        path = f"{prefix}_{len(paths) + 1}.png"
-        p.save(path)
-        paths.append(path)
+        _save(p, prefix, paths, note)
 
     # 1. Главные цифры и категории
     p = sheet(1, "Главные цифры", 1, len(m["cats"]) + 1, tiles=3)
