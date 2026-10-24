@@ -198,23 +198,70 @@ def card_png(title, data, prefix, top_rows=None):
     return paths
 
 
-def restock_png(title, rows, summary, prefix, limit=8, catalog=None):
-    """Сценарий 3: листы «грузить» и «перебор». Возвращает пути PNG."""
-    load = [r for r in rows if r["status"] in ("urgent", "low")][:limit]
+SUPPLY_COLS = [(0.05, "", "left"), (0.50, "есть", "right"), (0.62, "дней", "right"), (0.77, "нужно", "right"),
+               (0.95, "везти", "right")]
+
+
+def supply_row(r, label, sub):
+    """Строка «грузить»: полная потребность склада и сколько везти из своего остатка."""
+    col = BAD if r["status"] == "urgent" else WARN
+    d = f"{r['days']:.0f}" if r["days"] is not None else "—"
+    ship = r.get("ship", r["need"])
+    act = (f"{num(ship)} шт", INK, True) if ship else ("заказать", BAD, True)
+    if r.get("order") and ship:
+        sub = f"{sub} · своего не хватает, заказать ещё {num(r['order'])}"
+    return ([(label, col, True), (num(r["stock"] + r["transit"]), INK, False), (d, col, True),
+             (num(r["need"]), INK, False), act], sub)
+
+
+def excess_row(r, label, sub):
+    d = f"{r['days']:.0f}" if r["days"] is not None else "—"
+    return ([(label, EXCESS, True), (num(r["stock"] + r["transit"]), INK, False), (d, EXCESS, True),
+             None, (f"лишние ~{num(r['excess'])}", EXCESS, True)], sub)
+
+
+def supply_png(title, subtitle, rows, prefix, by="offer", tiles=None, per_sheet=12, max_sheets=4):
+    """Поставки: по складу (строки — артикулы) или по артикулу (строки — склады). Возвращает пути PNG."""
+    load = [r for r in rows if r["status"] in ("urgent", "low") and r["need"] > 0]
+    excess = [r for r in rows if r["status"] == "excess"] if by == "cluster" else []
+    first = "Склад" if by == "cluster" else "Артикул"
+    cols = [(SUPPLY_COLS[0][0], first, "left")] + SUPPLY_COLS[1:]
+
+    def fmt(r, fn):
+        if by == "cluster":
+            return fn(r, f"● {short(r['cluster'], 22)}", f"продаёт {r['ads']:.1f} шт/день")
+        return fn(r, r["offer_id"], short(r["name"], 48))
+
+    chunks = [load[i:i + per_sheet] for i in range(0, len(load), per_sheet)][:max_sheets] or [[]]
+    n, paths = len(chunks), []
+    for i, part in enumerate(chunks):
+        last = i == n - 1
+        n_rows = max(1, len(part)) + (max(1, len(excess)) if last and excess else 0)
+        p = Page(0.35 + 0.78 + (1.0 if tiles and i == 0 else 0) + 1.0 * (1 + (last and bool(excess)))
+                 + 0.42 * n_rows + 0.7, SHEET_W)
+        p.header(f"{i + 1}/{n} · {short(title, 28)}" if n > 1 else short(title, 32), subtitle)
+        if tiles and i == 0:
+            p.tiles(tiles)
+        p.table("Грузить: запаса меньше 20 дней", cols,
+                [fmt(r, supply_row) for r in part] or [([("● везти не нужно", GOOD, True), None, None, None, None], "")])
+        if last and excess:
+            p.table("Перебор: больше 60 дней", cols, [fmt(r, excess_row) for r in excess])
+        more = len(load) - per_sheet * max_sheets
+        _save(p, prefix, paths, ("Есть — на складе Ozon с учётом пути. Нужно — до 30 дней продаж. "
+                                 "Везти — из своего остатка (МойСклад).")
+              + (f"\nЕщё {more} строк не поместились — смотрите по артикулу." if last and more > 0 else
+                 "\nСвой остаток делится между складами: сначала туда, где кончится раньше."))
+    return paths
+
+
+def restock_png(title, rows, summary, prefix, limit=8):
+    """Сценарий 3 из карточки категории или артикула: листы «грузить» и «перебор». Возвращает пути PNG."""
+    load = [r for r in rows if r["status"] in ("urgent", "low") and r["need"] > 0][:limit]
     excess = sorted([r for r in rows if r["status"] == "excess"], key=lambda r: -r["excess"])[:limit]
-    cols = [(0.05, "Склад · товар", "left"), (0.55, "остаток", "right"), (0.68, "дней", "right"),
-            (0.95, "что сделать", "right")]
+    cols = [(0.05, "Склад · товар", "left")] + SUPPLY_COLS[1:]
 
-    def row(r, col, act):
-        d = f"{r['days']:.0f}" if r["days"] is not None else "—"
-        return ([(f"● {short(r['cluster'], 20)}", col, True), (num(r["stock"] + r["transit"]), INK, False),
-                 (d, col, True), (act, INK, True)], f"{r['offer_id']} · {short(r['name'], 46)}")
-
-    def load_act(r):
-        if catalog is None:
-            return f"везти {r['need']} шт"
-        own = (catalog.get(r["offer_id"]) or {}).get("stock", 0)
-        return f"везти {min(r['need'], own)} шт" if own > 0 else "своего 0 — заказать"
+    def label(r):
+        return f"● {short(r['cluster'], 20)}", f"{r['offer_id']} · {short(r['name'], 40)}"
 
     paths = []
     p = Page(0.35 + 0.78 + 1.0 + 1.0 + 0.42 * max(1, len(load)) + 0.7, SHEET_W)
@@ -224,16 +271,14 @@ def restock_png(title, rows, summary, prefix, limit=8, catalog=None):
         {"name": "Продажи в день, шт", "value": summary["ads"], "plain": True},
         {"name": "Хватит на, дн", "value": summary["days"] or 0, "plain": True},
     ])
-    p.table("Запаса меньше 20 дней", cols,
-            [row(r, BAD if r["status"] == "urgent" else WARN, load_act(r)) for r in load]
-            or [([("● везде норма", GOOD, True), None, None, None], "")])
-    _save(p, prefix, paths, "Остаток с учётом товара в пути. Свой склад — МойСклад.\n"
-          "Источник: Ozon Seller API, остатки по кластерам.")
+    p.table("Запаса меньше 20 дней", cols, [supply_row(r, *label(r)) for r in load]
+            or [([("● везде норма", GOOD, True), None, None, None, None], "")])
+    _save(p, prefix, paths, "Нужно — до 30 дней продаж на складе. Везти — из своего остатка (МойСклад),\n"
+          "он делится между складами: сначала туда, где кончится раньше.")
     p = Page(0.35 + 0.78 + 1.0 + 0.42 * max(1, len(excess)) + 0.7, SHEET_W)
     p.header("2/2 · Перебор", f"Подгрузка: {title} · перебор > 60 дн")
-    p.table("Оборачиваемость больше 60 дней", cols,
-            [row(r, EXCESS, f"лишние ~{r['excess']} шт") for r in excess]
-            or [([("● перебора нет", GOOD, True), None, None, None], "")])
+    p.table("Оборачиваемость больше 60 дней", cols, [excess_row(r, *label(r)) for r in excess]
+            or [([("● перебора нет", GOOD, True), None, None, None, None], "")])
     _save(p, prefix, paths, "Лишнее — сверх 60 дней продаж: вывезти или переместить.\n"
           "Скорость по складу — средняя по данным Ozon.")
     return paths
