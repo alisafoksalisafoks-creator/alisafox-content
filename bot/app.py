@@ -22,7 +22,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
                            Message)
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from bot import cards, dashboard, morning, restock, store
+from bot import cards, dashboard, morning, profit, restock, store
 from bot.category_report import MSK
 from bot.sources.moysklad import Catalog
 from bot.sources.ozon import OzonClient
@@ -131,7 +131,16 @@ def build_supply():
     """План по всем SKU с продажами за 30 дней: остатки по складам Ozon + свой остаток, поделённый по срочности."""
     skus = [r[0] for r in db.execute("select sku from daily where day >= ? group by sku having sum(ordered_units) > 0",
                                      (str(data_day() - timedelta(days=29)),))]
-    return restock.allocate(restock.plan(restock.cluster_stocks(oz, skus)), Catalog())
+    catalog = Catalog()
+    rows = restock.allocate(restock.plan(restock.cluster_stocks(oz, skus)), catalog)
+    try:
+        profits = profit.by_sku(db, oz, catalog, data_day())
+    except Exception:
+        log.exception("прибыль по артикулам не посчиталась")
+        profits = {}
+    for r in rows:
+        r["profit"] = (profits.get(r["sku"]) or {}).get("profit")
+    return rows
 
 
 async def supply_rows(msg: Message):
@@ -181,10 +190,13 @@ async def supply_sku(msg: Message, sku):
     need = sum(r["need"] for r in part if r["status"] in ("urgent", "low"))
     ship = sum(r.get("ship", 0) for r in part)
     tiles = [{"name": "Нужно всего, шт", "value": need, "plain": True},
-             {"name": "Везти, шт", "value": ship, "plain": True},
-             {"name": "Заказать, шт", "value": need - ship, "plain": True}]
-    await send_png(msg, lambda p: dashboard.supply_png(
-        offer, dashboard.short(part[0]["name"], 60), part, p, by="cluster", tiles=tiles),
+             {"name": "Везти, шт", "value": ship, "plain": True}]
+    if part[0].get("profit") is not None:
+        tiles.append({"name": "Прибыль 2 мес, ₽", "value": part[0]["profit"], "plain": True})
+    hint = (part[0].get("profit") or 0) > 0 and any(r.get("order") for r in part)
+    sub = (f"{dashboard.ORDER_HINT[0].upper()}{dashboard.ORDER_HINT[1:]}: своего мало, товар в прибыли за 2 мес"
+           if hint else dashboard.short(part[0]["name"], 60))
+    await send_png(msg, lambda p: dashboard.supply_png(offer, sub, part, p, by="cluster", tiles=tiles),
         f"Поставка: {offer}", kb([[("📋 Что отгрузить", "sup:l"), ("⬅️ Поставки", "sup")]]))
 
 
@@ -271,10 +283,11 @@ async def on_button(cb: CallbackQuery):
         if not sk:
             return await msg.answer("Отгружать нечего: запаса везде больше 20 дней.", reply_markup=SUPPLY_MENU)
         await msg.answer(f"Нужна отгрузка: {len(sk)} артикулов. Сверху — что можно везти со своего склада, "
-                         "ниже — что надо заказать у поставщика:",
+                         "ниже — чего на своём складе нет:",
                          reply_markup=kb([[(f"{s['offer_id'][:20]} · {s['clusters']} скл · "
-                                            + (f"везти {s['ship']} шт" if s["ship"] else "заказать"),
-                                            f"sup:k:{s['sku']}")] for s in sk[:40]] + [[("⬅️ Поставки", "sup")]]))
+                                            + (f"везти {s['ship']} шт" if s["ship"] else
+                                               "своего нет" + (" · к заказу" if (s.get("profit") or 0) > 0 else "")),
+                                            f"sup:k:{s['sku']}")] for s in sk[:80]] + [[("⬅️ Поставки", "sup")]]))
     elif d.startswith("sup:k:"):
         await supply_sku(msg, d[6:])
     elif d.startswith("p:"):

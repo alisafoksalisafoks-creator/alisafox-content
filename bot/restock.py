@@ -83,7 +83,7 @@ def render_text(title, rows, limit=12):
 
 def allocate(rows, catalog):
     """Делит свой остаток (МойСклад, корневой артикул) между складами Ozon: сначала туда, где запас кончится раньше.
-    need — полная потребность склада до 30 дней, ship — сколько везти из своего, order — не хватает, заказать."""
+    need — полная потребность склада до 30 дней, ship — сколько везти из своего, order — сколько не хватает своего."""
     groups = defaultdict(list)
     for r in rows:
         r["ship"], r["order"] = 0, 0
@@ -119,7 +119,7 @@ def by_sku(rows):
     for r in rows:
         if r["status"] in ("urgent", "low") and r["need"] > 0:
             s = out.setdefault(r["sku"], {"sku": r["sku"], "offer_id": r["offer_id"], "name": r["name"],
-                                          "clusters": 0, "need": 0, "ship": 0, "days": 999})
+                                          "clusters": 0, "need": 0, "ship": 0, "days": 999, "profit": r.get("profit")})
             s["clusters"] += 1
             s["need"] += r["need"]
             s["ship"] += r["ship"]

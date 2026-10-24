@@ -1,4 +1,5 @@
 """Сценарий 1: утренняя сводка Ozon за вчера."""
+import logging
 import time
 from datetime import date, timedelta
 
@@ -6,6 +7,7 @@ from bot import store
 from bot.sources import moysklad
 from bot.sources.performance import PerformanceClient
 
+log = logging.getLogger(__name__)
 TAX = 0.07  # УСН «доходы минус расходы»
 
 SERVICE_NAMES = {
@@ -118,6 +120,12 @@ def build(db, oz, day: date):
             cogs += c * r["n"]
         else:
             no_cost.append(r["offer_id"] or r["sku"])
+    try:  # прибыль по артикулам за 2 месяца — для пометки «к заказу»
+        from bot import profit as sku_profit
+        profits = sku_profit.by_sku(db, oz, ms, day)
+    except Exception:
+        log.exception("прибыль по артикулам не посчиталась")
+        profits = {}
     before_tax = fin["accrued"] - cogs
     profit = before_tax - max(0, before_tax) * TAX
 
@@ -134,5 +142,5 @@ def build(db, oz, day: date):
         "spend": spend, "spend_prev": spend_prev,
         "drr": spend / t["revenue"] * 100 if t["revenue"] else 0,
         "drr_prev": spend_prev / t_prev["revenue"] * 100 if t_prev["revenue"] else 0,
-        "ms": ms, "ending": ending, "excess": excess, "soon": soon, "rating_drops": rating_drops, "cats": cats,
+        "ms": ms, "profits": profits, "ending": ending, "excess": excess, "soon": soon, "rating_drops": rating_drops, "cats": cats,
     }
