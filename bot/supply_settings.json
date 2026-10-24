@@ -1,0 +1,5 @@
+{
+  "_comment": "Настройки агента поставок. delivery_days — дней от отгрузки со своего склада до приёмки на Ozon, target_days — запас на складе Ozon после приёмки.",
+  "delivery_days": 7,
+  "target_days": 30
+}
