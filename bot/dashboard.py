@@ -42,9 +42,9 @@ def delta_style(delta, lower_is_better=False):
 class Page:
     """Вертикальная страница: блоки кладутся сверху вниз, высота в дюймах считается заранее."""
 
-    def __init__(self, height):
+    def __init__(self, height, width=W_IN):
         self.h = height
-        self.fig = plt.figure(figsize=(W_IN, height), dpi=160, facecolor=SURFACE)
+        self.fig = plt.figure(figsize=(width, height), dpi=200 if width < W_IN else 160, facecolor=SURFACE)
         self.y = height - 0.35  # курсор сверху, в дюймах
 
     def box(self, x, h, w=None):
@@ -61,11 +61,12 @@ class Page:
         self.text(0.05, 0.28, subtitle, fontsize=10, color=INK2)
         self.y -= 0.2
 
-    def tiles(self, tiles):
-        w, gx, th, gy = 0.29, 0.02, 0.85, 0.15
-        for row in range(0, len(tiles), 3):
+    def tiles(self, tiles, per_row=3):
+        gx, th, gy = 0.02, 0.85, 0.15
+        w = (0.9 - gx * (per_row - 1)) / per_row
+        for row in range(0, len(tiles), per_row):
             self.y -= th
-            for i, t in enumerate(tiles[row:row + 3]):
+            for i, t in enumerate(tiles[row:row + per_row]):
                 ax = self.fig.add_axes([0.05 + i * (w + gx), self.y / self.h, w, th / self.h])
                 ax.set_facecolor(TILE)
                 ax.set_xticks([]), ax.set_yticks([])
@@ -218,18 +219,35 @@ def _chg(cur, old):
     return (cur - old) / abs(old) * 100 if old else None
 
 
-def morning_png(m, path):
-    """Сценарий 1: утренняя сводка."""
-    o, op, ow = m["orders"], m["orders_prev"], m["orders_week"]
+MORNING_W = 6.2  # уже обычной страницы: в телефоне шрифт выходит крупнее
+
+
+def morning_png(m, prefix):
+    """Сценарий 1: утренняя сводка — 4 листа по темам. Возвращает пути PNG."""
+    o, ow = m["orders"], m["orders_week"]
     fin, finp = m["fin"], m["fin_prev"]
     groups = ["Поиск", "Поиск и рекомендации", "ОЗЗ"]
     services = sorted(((k, v) for k, v in fin["services"].items() if v), key=lambda x: x[1])[:10]
     ending, excess = m["ending"][:8], m["excess"][:6]
     drops = m["rating_drops"]
-    n_rows = min(8, len(m["ms"].anomalies())) + 1 + len(m["cats"]) + len(groups) + 1 + len(services) + 2 + max(1, len(ending)) + max(1, len(excess)) + max(1, len(drops or [])[:6] if drops else 1)
-    h = 0.35 + 0.78 + 3 * 1.0 + 6 * 0.9 + 0.42 * n_rows + 0.8
-    p = Page(h)
-    p.header("Утренняя сводка Ozon", f"за {m['day']:%d.%m.%Y} · к позавчера и к тому же дню прошлой недели")
+    bad = list(m["ms"].anomalies().items())[:8]
+    day = f"{m['day']:%d.%m.%Y}"
+    paths = []
+
+    def sheet(n, title, n_tables, n_rows, tiles=0):
+        h = 0.35 + 0.78 + tiles * 1.0 + n_tables * 1.0 + 0.42 * n_rows + 0.7
+        p = Page(h, MORNING_W)
+        p.header(f"{n}/4 · {title}", f"Ozon за {day}")
+        return p
+
+    def done(p, note):
+        p.footer(note)
+        path = f"{prefix}_{len(paths) + 1}.png"
+        p.save(path)
+        paths.append(path)
+
+    # 1. Главные цифры и категории
+    p = sheet(1, "Главные цифры", 1, len(m["cats"]) + 1, tiles=3)
     p.tiles([
         {"name": "Заказы, ₽", "value": o["revenue"], "delta": _chg(o["revenue"], ow["revenue"])},
         {"name": "Заказы, шт", "value": o["ordered_units"], "delta": _chg(o["ordered_units"], ow["ordered_units"])},
@@ -237,25 +255,22 @@ def morning_png(m, path):
         {"name": "Общий ДРР, %", "value": m["drr"], "delta": _chg(m["drr"], m["drr_prev"]), "lower_is_better": True},
         {"name": "Реклама, ₽", "value": m["spend"], "delta": _chg(m["spend"], m["spend_prev"]), "lower_is_better": True},
         {"name": "Выкуп 30 дн, %", "value": m["buyout"], "delta": _chg(m["buyout"], m["buyout_prev"])},
-    ])
-    p.fig.text(0.05, (p.y - 0.05) / p.h,
-               f"Прибыль = начислено Ozon {num(fin['accrued'])} − себестоимость проданного {num(m['cogs'])} − УСН 7%."
-               + (f" Нет себестоимости: {', '.join(m['no_cost'][:4])}{'…' if len(m['no_cost']) > 4 else ''}" if m["no_cost"] else ""),
-               fontsize=7.5, color=MUTED)
-    p.fig.text(0.05, (p.y - 0.22) / p.h, "Заказы и выкуп — к тому же дню прошлой недели; реклама — к позавчера.",
-               fontsize=7.5, color=MUTED)
-    p.y -= 0.3
-
-    cols = [(0.05, "Категория", "left"), (0.62, "шт", "right"), (0.80, "₽", "right"), (0.95, "к нед. назад", "right")]
+    ], per_row=2)
+    cols = [(0.05, "Категория", "left"), (0.62, "шт", "right"), (0.80, "₽", "right"), (0.95, "к нед.", "right")]
     rows = []
     for c in m["cats"]:
         lab, col = delta_style(_chg(c["cur"] or 0, c["wk"] or 0))
-        rows.append(([(short(c["type_name"], 40), INK, True), (num(c["units"] or 0), INK, False),
+        rows.append(([(short(c["type_name"], 30), INK, True), (num(c["units"] or 0), INK, False),
                       (num(c["cur"] or 0), INK, False), (lab, col, True)], ""))
     p.table("Категории: заказы за день", cols, rows)
+    done(p, f"Прибыль = начислено Ozon {num(fin['accrued'])} − себестоимость {num(m['cogs'])} − УСН 7%."
+         + (f" Нет себестоимости: {', '.join(m['no_cost'][:4])}{'…' if len(m['no_cost']) > 4 else ''}." if m["no_cost"] else "")
+         + "\nЗаказы и выкуп — к тому же дню прошлой недели, реклама — к позавчера.")
 
-    cols = [(0.05, "Группа РК", "left"), (0.50, "расход, ₽", "right"), (0.70, "заказы по РК, ₽", "right"),
-            (0.83, "ДРР", "right"), (0.95, "к позавч.", "right")]
+    # 2. Реклама и удержания
+    p = sheet(2, "Реклама и удержания", 2, len(groups) + 1 + len(services) + 1)
+    cols = [(0.05, "Группа РК", "left"), (0.52, "расход, ₽", "right"), (0.74, "заказы, ₽", "right"),
+            (0.84, "ДРР", "right"), (0.95, "", "right")]
     rows = []
     for g in groups:
         a = m["ads"].get(g, {"spend": 0, "orders_money": 0})
@@ -263,22 +278,24 @@ def morning_png(m, path):
         drr = a["spend"] / a["orders_money"] * 100 if a["orders_money"] else 0
         drr_p = b["spend"] / b["orders_money"] * 100 if b["orders_money"] else 0
         lab, col = delta_style(_chg(drr, drr_p), lower_is_better=True)
-        rows.append(([(g, INK, True), (num(a["spend"]), INK, False), (num(a["orders_money"]), INK, False),
+        rows.append(([(short(g, 20), INK, True), (num(a["spend"]), INK, False), (num(a["orders_money"]), INK, False),
                       (f"{drr:.1f}%", INK, True), (lab, col, True)], ""))
     lab, col = delta_style(_chg(m["drr"], m["drr_prev"]), lower_is_better=True)
-    rows.append(([("Итого ко всем заказам", INK, True), (num(m["spend"]), INK, True),
+    rows.append(([("Итого", INK, True), (num(m["spend"]), INK, True),
                   (num(o["revenue"]), INK, False), (f"{m['drr']:.1f}%", INK, True), (lab, col, True)], ""))
-    p.table("Реклама и ДРР", cols, rows)
-
-    cols = [(0.05, "Статья", "left"), (0.72, "за день, ₽", "right"), (0.95, "к позавч.", "right")]
-    rows = [([(service_label_short(k), BAD if "fine" in k else INK, "fine" in k), (num(v), INK, False),
+    p.table("Реклама и ДРР (к позавчера)", cols, rows)
+    cols = [(0.05, "Статья", "left"), (0.74, "за день, ₽", "right"), (0.95, "к позавч.", "right")]
+    rows = [([(short(service_label_short(k), 32), BAD if "fine" in k else INK, "fine" in k), (num(v), INK, False),
               delta_style(_chg(-v, -finp["services"].get(k, 0)), lower_is_better=True) + (True,)], "")
             for k, v in services]
     rows.insert(0, ([("Комиссия Ozon", INK, True), (num(fin["commission"]), INK, False),
                      delta_style(_chg(-fin["commission"], -finp["commission"]), lower_is_better=True) + (True,)], ""))
     p.table("Удержания Ozon (штрафы — красным)", cols, rows)
+    done(p, "Итого ДРР — весь расход на рекламу ко всем заказам за день.\nИсточники: Ozon Performance API, Ozon Seller API.")
 
-    cols = [(0.05, "Товар", "left"), (0.50, "на Ozon", "right"), (0.63, "в день", "right"), (0.75, "хватит", "right"),
+    # 3. Остатки
+    p = sheet(3, "Остатки и хранение", 2, max(1, len(ending)) + max(1, len(excess)))
+    cols = [(0.05, "Товар", "left"), (0.45, "на Ozon", "right"), (0.60, "в день", "right"), (0.74, "хватит", "right"),
             (0.95, "свой склад", "right")]
     rows = []
     for x in ending:
@@ -286,33 +303,34 @@ def morning_png(m, path):
         rows.append(([(x["offer_id"], INK, True), (num(x["current_stock"]), INK, False), (f"{x['ads']:.1f}", INK, False),
                       (f"{x['idc']:.0f} дн", BAD, True),
                       (f"{num(own)} шт" if own > 0 else "0 — заказать", INK if own > 0 else BAD, True)],
-                     short(x["name"], 62)))
-    p.table(f"Скоро закончится: запаса меньше 20 дней ({len(m['ending'])} SKU)", cols,
-            rows or [([("● всё в норме", GOOD, True), None, None, None], "")])
-
-    cols = [(0.05, "Товар", "left"), (0.62, "остаток", "right"), (0.78, "в день", "right"), (0.95, "оборач.", "right")]
+                     short(x["name"], 48)))
+    p.table(f"Скоро закончится: меньше 20 дней ({len(m['ending'])} SKU)", cols,
+            rows or [([("● всё в норме", GOOD, True), None, None, None, None], "")])
+    cols = [(0.05, "Товар", "left"), (0.58, "остаток", "right"), (0.76, "в день", "right"), (0.95, "оборач.", "right")]
     rows = [([(x["offer_id"], INK, True), (num(x["current_stock"]), INK, False), (f"{x['ads']:.1f}", INK, False),
-              (f"{x['turnover']:.0f} дн", EXCESS, True)], short(x["name"], 62)) for x in excess]
-    p.table(f"Платное хранение: красная зона {len(m['excess'])} SKU, жёлтая (скоро) {len(m['soon'])} SKU", cols,
+              (f"{x['turnover']:.0f} дн", EXCESS, True)], short(x["name"], 48)) for x in excess]
+    p.table(f"Платное хранение: красных {len(m['excess'])}, скоро {len(m['soon'])} SKU", cols,
             rows or [([("● перебора нет", GOOD, True), None, None, None], "")])
+    done(p, "Полный список по складам — кнопка «Что подгрузить» в меню.\nСвой склад — остаток корневого артикула в МоёмСкладе.")
 
+    # 4. Рейтинг и МойСклад
+    n_drops = 1 if not drops else len(drops[:6])
+    p = sheet(4, "Рейтинг и проверки", 1 + bool(bad), n_drops + len(bad))
     cols = [(0.05, "Товар", "left"), (0.78, "было", "right"), (0.95, "стало", "right")]
     if drops is None:
-        rows = [([("База рейтинга собирается с сегодняшнего дня, сравнение — с завтра", MUTED, False), None, None], "")]
+        rows = [([("База собирается, сравнение — с завтра", MUTED, False), None, None], "")]
     else:
         rows = [([(r["offer_id"] or r["sku"], INK, True), (f"{r['old']:.0f}", INK, False), (f"{r['new']:.0f}", BAD, True)],
-                 short(r["name"] or "", 62)) for r in drops[:6]] or [([("● падений нет", GOOD, True), None, None], "")]
+                 short(r["name"] or "", 48)) for r in drops[:6]] or [([("● падений нет", GOOD, True), None, None], "")]
     p.table("Контент-рейтинг упал ко вчера", cols, rows)
-    bad = m["ms"].anomalies()
     if bad:
-        cols = [(0.05, "Артикул МоегоСклада", "left"), (0.72, "остаток", "right"), (0.95, "себестоимость", "right")]
-        p.table("Проверьте в МоёмСкладе: минус в остатке или себестоимости", cols,
+        cols = [(0.05, "Артикул", "left"), (0.66, "остаток", "right"), (0.95, "себестоим.", "right")]
+        p.table("МойСклад: минус в остатке или себестоимости", cols,
                 [([(k, BAD, True), (num(v["stock"]), BAD if v["stock"] < 0 else INK, False),
                    (f"{v.get('avg_cost', v['cost']):.2f} ₽", BAD if v.get("bad_cost") else INK, False)], "")
-                 for k, v in list(bad.items())[:8]])
-    p.footer("Себестоимость и свой склад — МойСклад. Налог — УСН 7% от (доходы − расходы).\n"
-             "Источники: Ozon Seller API, Ozon Performance API, МойСклад.")
-    p.save(path)
+                 for k, v in bad])
+    done(p, "Налог — УСН 7% от (доходы − расходы).\nИсточники: Ozon Seller API, Ozon Performance API, МойСклад.")
+    return paths
 
 
 def service_label_short(name):
