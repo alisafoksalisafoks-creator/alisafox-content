@@ -17,13 +17,15 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from bot import cards, dashboard, restock, store
+from bot import cards, dashboard, morning, restock, store
 from bot.category_report import MSK
+from bot.sources.moysklad import Catalog
 from bot.sources.ozon import OzonClient
 
 log = logging.getLogger("bot")
 ALLOWED = {int(x) for x in os.environ.get("TELEGRAM_CHAT_ID", "").replace(" ", "").split(",") if x}
 REFRESH_HOUR = 6  # обновление истории каждое утро в 6:00 МСК
+MORNING_HOUR = 9  # утренняя сводка в 9:00 МСК
 
 dp = Dispatcher()
 db = store.connect()
@@ -44,7 +46,8 @@ def kb(rows):
                                                  for r in rows])
 
 
-MENU = kb([[("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
+MENU = kb([[("📊 Сводка за вчера", "morning")],
+           [("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
            [("🚚 Что подгрузить", "restock_all")]])
 
 
@@ -122,8 +125,28 @@ async def restock_card(msg: Message, target=None):
         skus, title = [s["sku"]], s["offer_id"] or s["sku"]
     rows = restock.plan(await asyncio.to_thread(restock.cluster_stocks, oz, skus))
     summ = restock.summary(rows)
-    await send_png(msg, lambda p: dashboard.restock_png(title, rows, summ, p),
+    catalog = await asyncio.to_thread(Catalog)
+    await send_png(msg, lambda p: dashboard.restock_png(title, rows, summ, p, catalog=catalog),
                    f"Подгрузка: {title}", kb([[("⬅️ Меню", "menu")]]))
+
+
+def render_morning(path):
+    m = morning.build(db, oz, data_day())
+    dashboard.morning_png(m, path)
+
+
+async def morning_card(msg: Message):
+    await send_png(msg, render_morning, f"Утренняя сводка Ozon за {data_day():%d.%m.%Y}", MENU)
+
+
+async def send_morning(bot: Bot):
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        path = f.name
+    await asyncio.to_thread(render_morning, path)
+    for chat in ALLOWED:
+        await bot.send_photo(chat, FSInputFile(path), caption=f"Утренняя сводка Ozon за {data_day():%d.%m.%Y}",
+                             reply_markup=MENU)
+    os.unlink(path)
 
 
 @dp.message(CommandStart())
@@ -161,6 +184,9 @@ async def on_button(cb: CallbackQuery):
     msg, d = cb.message, cb.data
     if d == "menu":
         await msg.answer("Что смотрим?", reply_markup=MENU)
+    elif d == "morning":
+        await msg.answer("Собираю сводку: финансы, реклама, остатки. Около минуты…")
+        await morning_card(msg)
     elif d == "cats":
         rows = store.categories(db, data_day() - timedelta(days=29))[:24]
         buttons = [(r["type_name"][:30], f"p:c:{r['type_id']}:week") for r in rows]
@@ -197,11 +223,23 @@ def refresh_data():
     log.info("данные обновлены по %s", store.last_day(db))
 
 
-async def scheduler():
-    """Обновление данных утром и пинг мониторинга каждые 5 минут."""
+async def scheduler(bot: Bot):
+    """Обновление данных утром, сводка в 9:00 и пинг мониторинга каждые 5 минут.
+    Если в 9:00 бот был выключен, сводка уйдёт сразу после запуска (до конца дня)."""
     url = os.environ.get("HEALTHCHECK_URL")
+    db.execute("create table if not exists sent (day text primary key)")
     while True:
         now = datetime.now(MSK)
+        today = str(now.date())
+        if now.hour >= MORNING_HOUR and not db.execute("select 1 from sent where day = ?", (today,)).fetchone():
+            try:
+                if (store.last_day(db) or date.min) < yesterday():
+                    await asyncio.to_thread(refresh_data)
+                await send_morning(bot)
+                db.execute("insert into sent values (?)", (today,))
+                db.commit()
+            except Exception:
+                log.exception("утренняя сводка не отправлена")
         if now.hour == REFRESH_HOUR and now.minute < 5 or (store.last_day(db) or date.min) < yesterday() - timedelta(days=1):
             try:
                 await asyncio.to_thread(refresh_data)
@@ -222,7 +260,7 @@ async def main():
         log.info("первая загрузка истории за %s дней, это займёт ~10 минут", store.FIRST_LOAD_DAYS)
         await asyncio.to_thread(refresh_data)
     bot = Bot(os.environ["TELEGRAM_BOT_TOKEN"])
-    asyncio.create_task(scheduler())
+    asyncio.create_task(scheduler(bot))
     await dp.start_polling(bot)
 
 

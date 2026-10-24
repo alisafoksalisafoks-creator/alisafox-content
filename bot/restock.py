@@ -15,12 +15,12 @@ def cluster_stocks(oz, skus):
         res = oz.post("/v1/analytics/stocks", {"skus": skus[i:i + 100]})
         for it in res.get("items", []):
             c = out[str(it["sku"])].setdefault(it["cluster_name"], {
-                "stock": 0, "transit": 0, "ads": it.get("ads_cluster", 0),
-                "days_no_sales": it.get("days_without_sales_cluster", 0),
+                "stock": 0, "transit": 0, "ads": it.get("ads_cluster") or 0,
+                "days_no_sales": it.get("days_without_sales_cluster") or 0,
                 "grade": it.get("turnover_grade_cluster", ""), "offer_id": it.get("offer_id", ""),
                 "name": it.get("name", "")})
-            c["stock"] += it.get("available_stock_count", 0)
-            c["transit"] += it.get("transit_stock_count", 0) + it.get("requested_stock_count", 0)
+            c["stock"] += it.get("available_stock_count") or 0
+            c["transit"] += (it.get("transit_stock_count") or 0) + (it.get("requested_stock_count") or 0)
         time.sleep(1)
     return out
 
