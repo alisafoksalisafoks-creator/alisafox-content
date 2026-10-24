@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import ssl
 import tempfile
 from datetime import date, datetime, timedelta
@@ -16,7 +17,8 @@ import httpx
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto,
+                           Message)
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
 from bot import cards, dashboard, morning, restock, store
@@ -132,23 +134,32 @@ async def restock_card(msg: Message, target=None):
                    f"Подгрузка: {title}", kb([[("⬅️ Меню", "menu")]]))
 
 
-def render_morning(path):
+def render_morning():
+    """Листы утренней сводки во временной папке: (папка, пути PNG)."""
     m = morning.build(db, oz, data_day())
-    dashboard.morning_png(m, path)
+    tmp = tempfile.mkdtemp()
+    return tmp, dashboard.morning_png(m, os.path.join(tmp, "morning"))
+
+
+async def push_morning(bot: Bot, chats):
+    tmp, paths = await asyncio.to_thread(render_morning)
+    caption = f"Утренняя сводка Ozon за {data_day():%d.%m.%Y}"
+    album = [InputMediaPhoto(media=FSInputFile(p), caption=caption if i == 0 else None) for i, p in enumerate(paths)]
+    try:
+        for chat in chats:
+            await bot.send_media_group(chat, album)
+            await bot.send_message(chat, "Что смотрим дальше?", reply_markup=MENU)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 async def morning_card(msg: Message):
-    await send_png(msg, render_morning, f"Утренняя сводка Ozon за {data_day():%d.%m.%Y}", MENU)
+    await msg.answer("Собираю сводку, это займёт около минуты…")
+    await push_morning(msg.bot, [msg.chat.id])
 
 
 async def send_morning(bot: Bot):
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-        path = f.name
-    await asyncio.to_thread(render_morning, path)
-    for chat in ALLOWED:
-        await bot.send_photo(chat, FSInputFile(path), caption=f"Утренняя сводка Ozon за {data_day():%d.%m.%Y}",
-                             reply_markup=MENU)
-    os.unlink(path)
+    await push_morning(bot, ALLOWED)
 
 
 @dp.message(CommandStart())
