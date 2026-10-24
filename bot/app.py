@@ -8,11 +8,13 @@ import asyncio
 import logging
 import os
 import re
+import ssl
 import tempfile
 from datetime import date, datetime, timedelta
 
 import httpx
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -259,7 +261,10 @@ async def main():
     if store.last_day(db) is None:
         log.info("первая загрузка истории за %s дней, это займёт ~10 минут", store.FIRST_LOAD_DAYS)
         await asyncio.to_thread(refresh_data)
-    bot = Bot(os.environ["TELEGRAM_BOT_TOKEN"])
+    session = AiohttpSession()
+    if os.environ.get("SSL_CERT_FILE"):  # свой корневой сертификат (прокси облачной сессии)
+        session._connector_init["ssl"] = ssl.create_default_context(cafile=os.environ["SSL_CERT_FILE"])
+    bot = Bot(os.environ["TELEGRAM_BOT_TOKEN"], session=session)
     asyncio.create_task(scheduler(bot))
     await dp.start_polling(bot)
 
