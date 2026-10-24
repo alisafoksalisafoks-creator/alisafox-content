@@ -46,18 +46,18 @@ class Catalog:
             elif item["avg_cost"] < 0:
                 item["bad_cost"] = True
 
-        # сводим карточки-дубли с NEW к корневому артикулу: остатки складываем,
-        # себестоимость берём у корня, а если её нет — у дубля
+        # один остаток на корневой артикул: дубли с NEW не суммируем, берём остаток корня;
+        # если корня в МоёмСкладе нет — остаток самого дубля
         self.roots = {}
         for key in sorted(self.items, key=len):
             item, root = self.items[key], RELAUNCH.sub("", key)
-            r = self.roots.setdefault(root, {"stock": 0, "in_transit": 0, "cost": 0, "variants": []})
-            r["stock"] += item["stock"]
-            r["in_transit"] += item["in_transit"]
-            if r["cost"] <= 0 < item["cost"]:
-                r["cost"] = item["cost"]
+            if root not in self.roots:
+                self.roots[root] = dict(item, variants=[])
+            r = self.roots[root]
             if key != root:
                 r["variants"].append(key)
+                if r["cost"] <= 0 < item["cost"]:
+                    r["cost"] = item["cost"]
 
     def get(self, offer_id):
         return self.roots.get(RELAUNCH.sub("", (offer_id or "").strip().upper()))
