@@ -71,6 +71,8 @@ class Plan:
     lines: list = field(default_factory=list)
     decide: list = field(default_factory=list)      # [{offer, warehouse, reason, ...}] — «Решить / стоп»
     no_stock: list = field(default_factory=list)    # [{offer, root, sales14}] — на нашем складе 0
+    order: list = field(default_factory=list)       # «Заказать»: на Ozon кончается, у нас нет или мало, прибыльные
+    order_skipped: list = field(default_factory=list)  # не попали в «Заказать»: минус или нет данных о прибыли
     purchase: list = field(default_factory=list)    # [{root, short, need, free}]
     empty_clusters: list = field(default_factory=list)
     empty_whole: list = field(default_factory=list)
@@ -204,7 +206,7 @@ def build(snap, overrides=None):
 
     # --- проверки по артикулу ---
     offers = {k[0] for k in list(s30) + list(stock)}
-    eligible = {}
+    eligible, no_stock_k = {}, {}
     for offer in sorted(offers):
         name = offer_name.get(offer, offer)
         u = snap.unit.get(offer)
@@ -245,6 +247,7 @@ def build(snap, overrides=None):
         if not key or ms_by[key]["free"] <= 0:
             if tot14:
                 plan.no_stock.append({"offer": name, "root": u["root"], "sales14": tot14})
+                no_stock_k[offer] = {"u": u, "k": season_k(snap, u.get("category"), month), "name": name}
             continue
         k = season_k(snap, u.get("category"), month)
         k_next = season_k(snap, u.get("category"), month % 12 + 1)
@@ -354,6 +357,38 @@ def build(snap, overrides=None):
             if ln.manual and ln.qty > ln.need + ln.speed * config.ROUND_UP_EXTRA_DAYS and ln.speed:
                 ln.flags.append(f"запас после поставки {(ln.have + ln.qty) / ln.speed - ln.lead:.0f} дн — больше 30")
 
+    # --- «Заказать»: потребность кластеров больше, чем можем отгрузить с нашего склада ---
+    shipped = defaultdict(int)
+    for (offer, _d), ln in lines.items():
+        shipped[offer] += ln.qty
+    cl_of_offer = defaultdict(set)
+    for (o, cl) in set(s14c) | set(stock_c):
+        if cl:
+            cl_of_offer[o].add(cl)
+    for offer, e in list(eligible.items()) + list(no_stock_k.items()):
+        need = have = 0
+        speed = 0.0
+        for cl in cl_of_offer[offer]:
+            o = offer
+            sp = s14c.get((o, cl), 0) / config.SALES_DAYS * e["k"]
+            st = stock_c.get((o, cl), zero)
+            need += max(0, round(sp * (config.lead_days(cl) + config.TARGET_DAYS) - st["available"] - st["transit"]))
+            have += st["available"] + st["transit"]
+            speed += sp
+        short = need - shipped.get(offer, 0)
+        if short <= 0 or not speed:
+            continue
+        key = _ms_key(offer, snap.unit, ms_by)
+        item = {"offer": e["name"], "root": e["u"]["root"], "profit": e["u"].get("profit"),
+                "speed": speed, "ozon": have, "days": have / speed, "need": need,
+                "free": ms_by[key]["free"] if key else 0, "ship": shipped.get(offer, 0), "order": short}
+        if item["profit"] is None or item["profit"] <= 0:
+            item["why"] = "нет данных о прибыли" if item["profit"] is None else "минусовой артикул"
+            plan.order_skipped.append(item)
+        else:
+            plan.order.append(item)
+    plan.order.sort(key=lambda x: (x["days"], -x["speed"]))
+
     plan.small = [{"offer": ln.offer, "warehouse": ln.warehouse, "need": ln.need, "speed": ln.speed,
                    "box": min((sz for _, sz in _sizes(norm(ln.offer), ln.root, snap.boxes)), default=None),
                    "priority": ln.priority,
@@ -453,9 +488,6 @@ def _level(group, free):
         add = min(rest, ln.need - ln.qty)
         ln.qty += add
         rest -= add
-    for ln in group:
-        if ln.qty < ln.need:
-            ln.flags.append(f"на нашем складе не хватает: нужно {ln.need}, даём {ln.qty}")
 
 
 def _fit(group, free):

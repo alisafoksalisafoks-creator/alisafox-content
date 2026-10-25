@@ -46,10 +46,9 @@ def summary(plan, taken_at=""):
     if plan.empty_clusters:
         cl = sorted({x["cluster"] for x in plan.empty_clusters})
         lines.append(f"Хиты, которых нет во всём кластере: {len(plan.empty_clusters)} — в {len(cl)} кластерах, кнопка «Пустые кластеры».")
-    if plan.no_stock:
-        lines.append(f"Нет на нашем складе: {len(plan.no_stock)} арт., везти нечего.")
-    if plan.purchase:
-        lines.append(f"Не хватает на нашем складе: {fmt(sum(x['short'] for x in plan.purchase))} шт по {len(plan.purchase)} арт. — «К закупке» в файле.")
+    if plan.order:
+        lines.append(f"🛒 Заказать: {len(plan.order)} арт., {fmt(sum(x['order'] for x in plan.order))} шт — "
+                     "на Ozon заканчиваются, у нас нет или мало. Кнопка «Заказать».")
     if plan.decide:
         lines.append(f"Решить / стоп: {len(plan.decide)} арт.")
     if plan.paid:
@@ -97,7 +96,8 @@ def offer(plan, query, snap_unit=None):
         if why:
             return [f"<code>{escape(query)}</code>: не везём — {escape(why[0]['reason'])}."]
         if any(norm(x["offer"]) == q for x in plan.no_stock):
-            return [f"<code>{escape(query)}</code>: у вас нет товара, везти нечего."]
+            tail = " Он в списке «Заказать»." if any(norm(x["offer"]) == q for x in plan.order) else ""
+            return [f"<code>{escape(query)}</code>: у вас нет товара, везти нечего.{tail}"]
         small = [x for x in plan.small if norm(x["offer"]) == q]
         if small:
             ff = next((r for r in plan.ff.values() if norm(r["article"]) in (q, root_of(q))), None)
@@ -126,6 +126,24 @@ def offer(plan, query, snap_unit=None):
     if gaps:
         rows += ["", "Нет ни на одном складе кластера: " + ", ".join(escape(x["cluster"]) for x in gaps)]
     return chunks(head + rows)
+
+
+def order(plan):
+    """Кнопка «Заказать»: на Ozon кончается или уже 0, на нашем складе нет или мало. Только прибыльные."""
+    if not plan.order:
+        return ["Заказывать нечего: всё, что кончается на Ozon, есть на нашем складе."]
+    lines = ["<b>🛒 Заказать</b>",
+             "На Ozon скоро закончится или уже 0, а на нашем складе нет или не хватает. Только прибыльные артикулы.",
+             "Заказать = потребность кластеров на срок L + 30 дн − что отгружаем с нашего склада.", ""]
+    for x in plan.order:
+        when = "на Ozon уже 0" if x["ozon"] <= 0 else f"на Ozon хватит на {x['days']:.0f} дн"
+        lines.append(f"<code>{escape(x['offer'])}</code> — заказать <b>{fmt(x['order'])}</b> шт · {when} · "
+                     f"{x['speed']:.1f} шт/дн · у нас {fmt(x['free'])} · прибыль {fmt(x['profit'])} ₽/шт")
+    if plan.order_skipped:
+        minus = sum(1 for x in plan.order_skipped if x["why"] == "минусовой артикул")
+        lines += ["", f"Не включены: минусовые — {minus}, без данных о прибыли — {len(plan.order_skipped) - minus}. "
+                      "Список в файле, лист «Заказать»."]
+    return chunks(lines)
 
 
 def empty_clusters(plan):

@@ -75,13 +75,14 @@ def build(plan, path, snap_time=""):
            [[x["offer"], x.get("status"), x.get("rating"), x.get("buyout"), x.get("sales14"), x["reason"]]
             for x in plan.decide], [28, 16, 9, 9, 12, 70])
 
-    _sheet(wb, "Нет на нашем складе", ["Артикул", "Корень", "Продажи 14 дн", "Что сказать"],
-           [[x["offer"], x["root"], x["sales14"], "у вас нет товара, везти нечего"] for x in plan.no_stock],
-           [28, 22, 12, 34])
-
-    _sheet(wb, "К закупке", ["Артикул «Моего склада»", "Нужно по складам", "Свободно у нас", "Не хватает"],
-           [[x["root"], x["need"], x["free"], x["short"]] for x in sorted(plan.purchase, key=lambda x: -x["short"])],
-           [26, 16, 14, 12])
+    _sheet(wb, "Заказать",
+           ["Артикул", "Корень", "Заказать, шт", "На Ozon (доступно + в пути)", "Хватит на Ozon, дн", "Продажи, шт/дн",
+            "Потребность кластеров", "Свободно у нас", "Отгружаем сейчас", "Прибыль, ₽/шт", "В заказ"],
+           [[x["offer"], x["root"], x["order"], x["ozon"], round(x["days"], 1), round(x["speed"], 2), x["need"], x["free"],
+             x["ship"], x["profit"], "да"] for x in plan.order]
+           + [[x["offer"], x["root"], x["order"], x["ozon"], round(x["days"], 1), round(x["speed"], 2), x["need"], x["free"],
+               x["ship"], x["profit"], "нет: " + x["why"]] for x in plan.order_skipped],
+           [26, 20, 12, 14, 12, 12, 14, 12, 12, 12, 30])
 
     _sheet(wb, "Скоро платно", ["Артикул", "Шт", "Платное с", "Дней до платного"],
            [[x["offer"], x["qty"], x["date"], x["days"]] for x in plan.paid], [28, 8, 12, 14])

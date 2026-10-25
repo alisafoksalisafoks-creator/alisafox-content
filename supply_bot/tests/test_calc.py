@@ -142,3 +142,15 @@ def test_moscow_is_one_cluster():
     plan = calc.build(s)
     msk = [ln for ln in plan.lines if ln.cluster.startswith("Москва")]
     assert len(msk) == 1 and msk[0].need == 8 * 37 - 100
+
+
+def test_order_only_profitable_items_missing_on_our_stock():
+    units = {"OZ1": {**unit("OZ1"), "profit": 50}, "OZ2": {**unit("OZ2"), "profit": -10},
+             "OZ3": {**unit("OZ3"), "profit": 30}}
+    post = sales("OZ1", MSK1, 5) + sales("OZ2", MSK1, 5) + sales("OZ3", MSK1, 5)
+    plan = calc.build(snap(post, ms={"OZ1": 0, "OZ2": 0, "OZ3": 100}, units=units))
+    got = {x["offer"]: x for x in plan.order}
+    assert set(got) == {"OZ1", "OZ3"}                     # минусовой OZ2 не заказываем
+    assert got["OZ1"]["order"] == 5 * 37 and got["OZ3"]["order"] == 5 * 37 - got["OZ3"]["ship"]
+    assert all(ln.offer != "OZ1" for ln in plan.lines)  # в распределении только то, что есть у нас
+    assert plan.order_skipped[0]["why"] == "минусовой артикул"

@@ -60,6 +60,14 @@ def _find(headers, *names):
     raise LookupError(f"В таблице нет столбца «{names[0]}» — шапку переименовали?")
 
 
+def _find_exact(headers, name):
+    """Столбец с точно таким названием; нет — None (у «Чистая прибыль» есть похожие соседи)."""
+    for i, h in enumerate(headers):
+        if re.sub(r"\s+", " ", h or "").strip().lower() == name.lower():
+            return i
+    return None
+
+
 def parse_unit(rows):
     """Лист «Юнит экономика Алиса» → {артикул: {...}}. Шапка в строках 1–2, данные с 5-й."""
     h1 = rows[0] + [""] * 200
@@ -74,6 +82,7 @@ def parse_unit(rows):
         "volume": _find(h2, "Объем товара, л"),
         "buyout": _find(merged, "Выкупаемость по заказам факт"),
     }
+    profit_col = _find_exact(h2, config.PROFIT_COLUMN)
     out, dupes = {}, {}
     for r in rows[4:]:
         r = r + [""] * (max(col.values()) + 1 - len(r))
@@ -88,6 +97,7 @@ def parse_unit(rows):
             "category": r[col["category"]].strip(),
             "volume": _num(r[col["volume"]]),
             "buyout": (_num(r[col["buyout"]]) / 100) if _num(r[col["buyout"]]) is not None else None,
+            "profit": _num(r[profit_col]) if profit_col is not None and profit_col < len(r) else None,
         }
         if art in out and out[art]["status"] != rec["status"]:
             dupes[art] = {out[art]["status"], rec["status"]}
