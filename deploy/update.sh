@@ -1,7 +1,7 @@
 #!/bin/bash
-# Обновить ботов на сервере вручную, когда в код внесли правку. Запуск от root одной командой:
+# Обновить бота поставок на сервере вручную, когда в код внесли правку. Запуск от root одной командой:
 #   bash /opt/supply-bot/src/deploy/update.sh
-# Берёт новую версию кода и перезапускает ботов. Если новый код не собирается (ошибка в Python),
+# Берёт новую версию кода и перезапускает бота поставок. Если новый код не собирается (ошибка в Python),
 # откатывает на прежнюю версию, и бот продолжает работать на старой.
 # Весь скрипт в фигурных скобках: bash читает его целиком до запуска, и git может спокойно заменить этот файл.
 {
@@ -40,9 +40,7 @@ update() {
 
 ok=1
 update /opt/supply-bot/src /opt/supply-bot/venv supply_bot/requirements.txt supply-bot supply_bot || ok=0
-if systemctl is-enabled -q alisafox-bot 2>/dev/null; then
-  update /opt/alisafox-content /opt/alisafox-content/.venv bot/requirements.txt alisafox-bot bot || ok=0
-fi
+# бот аналитики обновляется своей командой: bash /opt/alisafox-content/bot/deploy/update.sh
 [ $ok = 1 ] && echo ГОТОВО
 exit 0
 }
