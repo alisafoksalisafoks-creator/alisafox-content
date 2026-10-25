@@ -28,7 +28,7 @@ from bot.sources.moysklad import Catalog
 from bot.sources.ozon import OzonClient
 
 log = logging.getLogger("bot")
-ALLOWED = {int(x) for x in os.environ.get("TELEGRAM_CHAT_ID", "").replace(" ", "").split(",") if x}
+ADMINS = {int(x) for x in os.environ.get("TELEGRAM_CHAT_ID", "").replace(" ", "").split(",") if x}  # владелец
 REFRESH_HOUR = 6  # обновление истории каждое утро в 6:00 МСК
 MORNING_HOUR = 9  # утренняя сводка в 9:00 МСК
 
@@ -68,8 +68,44 @@ def period_kb(target, kind):
                [("🚚 Подгрузка", f"r:{target}"), ("⬅️ Меню", "menu")]])
 
 
+db.execute("create table if not exists users (id integer primary key, name text, added text)")
+access_requests: dict[int, str] = {}  # кто нажал /start без доступа: id → имя
+
+
+def users():
+    """Пользователи, которых владелец добавил кнопкой: {id: имя}."""
+    return {r[0]: r[1] for r in db.execute("select id, name from users")}
+
+
+def recipients():
+    return ADMINS | set(users())
+
+
 def allowed(user_id):
-    return not ALLOWED or user_id in ALLOWED
+    return user_id in ADMINS or user_id in users() or not ADMINS
+
+
+def is_admin(user_id):
+    return user_id in ADMINS
+
+
+def menu_for(user_id):
+    rows = [[(b.text, b.callback_data) for b in r] for r in MENU.inline_keyboard]
+    return kb(rows + [[("👥 Пользователи", "u")]]) if is_admin(user_id) else MENU
+
+
+def add_user(uid, name):
+    db.execute("insert or replace into users values (?, ?, ?)", (uid, name, datetime.now(MSK).strftime("%d.%m.%Y")))
+    db.commit()
+
+
+def users_kb():
+    rows = [[(f"❌ {name or uid}", f"u:del:{uid}")] for uid, name in users().items()]
+    return kb(rows + [[("➕ Добавить по ID", "u:add")], [("⬅️ Меню", "menu")]])
+
+
+def who(u):
+    return " ".join(x for x in (u.first_name, u.last_name) if x) + (f" (@{u.username})" if u.username else "")
 
 
 async def send_sheets(bot: Bot, chats, render, caption, markup=None):
@@ -214,15 +250,22 @@ async def morning_card(msg: Message):
 
 
 async def send_morning(bot: Bot):
-    await push_morning(bot, ALLOWED)
+    await push_morning(bot, recipients())
 
 
 @dp.message(CommandStart())
 @dp.message(Command("menu"))
 async def start(msg: Message):
-    if not allowed(msg.from_user.id):
-        return await msg.answer(f"Нет доступа. Ваш ID: {msg.from_user.id}")
-    await msg.answer(f"Данные Ozon по {data_day():%d.%m.%Y}. Что смотрим?", reply_markup=MENU)
+    u = msg.from_user
+    if not allowed(u.id):
+        if u.id not in access_requests:
+            access_requests[u.id] = who(u)
+            for admin in ADMINS:
+                await msg.bot.send_message(admin, f"Запрос доступа к боту: {who(u)}, ID {u.id}", reply_markup=kb(
+                    [[("✅ Дать доступ", f"u:ok:{u.id}"), ("✖️ Отклонить", f"u:no:{u.id}")]]))
+        return await msg.answer(f"Нет доступа. Запрос отправлен владельцу, бот напишет, когда доступ откроют.\n"
+                                f"Ваш ID: {u.id}")
+    await msg.answer(f"Данные Ozon по {data_day():%d.%m.%Y}. Что смотрим?", reply_markup=menu_for(u.id))
 
 
 @dp.message(Command("compare"))
@@ -251,7 +294,11 @@ async def on_button(cb: CallbackQuery):
     await cb.answer()
     msg, d = cb.message, cb.data
     if d == "menu":
-        await msg.answer("Что смотрим?", reply_markup=MENU)
+        await msg.answer("Что смотрим?", reply_markup=menu_for(cb.from_user.id))
+    elif d.startswith("u") and (d == "u" or d.startswith("u:")):
+        if not is_admin(cb.from_user.id):
+            return await msg.answer("Пользователей добавляет только владелец.")
+        await users_button(msg, cb.from_user.id, d)
     elif d == "morning":
         await msg.answer("Собираю сводку: финансы, реклама, остатки. Около минуты…")
         await morning_card(msg)
@@ -298,9 +345,47 @@ async def on_button(cb: CallbackQuery):
         await restock_card(msg, d[2:])
 
 
+async def users_button(msg: Message, admin, d):
+    if d == "u":
+        n = len(users())
+        await msg.answer(f"Пользователи бота: {n}. Нажмите на имя, чтобы закрыть доступ.\n"
+                         "Проще всего добавить так: человек пишет боту /start, вам приходит запрос с кнопкой «Дать доступ».",
+                         reply_markup=users_kb())
+    elif d == "u:add":
+        waiting[admin] = "adduser"
+        await msg.answer("Пришлите Telegram ID пользователя (цифры) или перешлите сюда любое его сообщение.")
+    elif d.startswith("u:ok:"):
+        uid = int(d[5:])
+        add_user(uid, access_requests.pop(uid, str(uid)))
+        await msg.answer(f"Доступ открыт: {users()[uid]}.", reply_markup=users_kb())
+        await msg.bot.send_message(uid, "Доступ к боту аналитики AlisaFox открыт. Нажмите /start")
+    elif d.startswith("u:no:"):
+        access_requests.pop(int(d[5:]), None)
+        await msg.answer("Запрос отклонён.")
+    elif d.startswith("u:del:"):
+        uid = int(d[6:])
+        db.execute("delete from users where id = ?", (uid,))
+        db.commit()
+        await msg.answer("Доступ закрыт.", reply_markup=users_kb())
+
+
 @dp.message(F.text)
 async def on_text(msg: Message):
     if not allowed(msg.from_user.id):
+        return
+    if waiting.get(msg.from_user.id) == "adduser":
+        origin = getattr(msg, "forward_origin", None)
+        fwd = getattr(origin, "sender_user", None)
+        if fwd:
+            uid, name = fwd.id, who(fwd)
+        elif (msg.text or "").strip().isdigit():
+            uid, name = int(msg.text.strip()), msg.text.strip()
+        else:
+            return await msg.answer("Не вижу ID. Пришлите цифры или перешлите сообщение пользователя. "
+                                    "Если он скрыл аккаунт при пересылке, попросите его написать боту /start.")
+        waiting.pop(msg.from_user.id)
+        add_user(uid, name)
+        await msg.answer(f"Добавлен: {name}. Пусть нажмёт /start в боте.", reply_markup=users_kb())
         return
     s = store.find_sku(db, msg.text)
     if not s:
