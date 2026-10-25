@@ -26,6 +26,7 @@ from bot import cards, dashboard, morning, profit, restock, signals, store
 from bot.category_report import MSK
 from bot.sources.moysklad import Catalog
 from bot.sources.ozon import OzonClient
+from bot.sources.performance import PerformanceClient
 
 log = logging.getLogger("bot")
 ADMINS = {int(x) for x in os.environ.get("TELEGRAM_CHAT_ID", "").replace(" ", "").split(",") if x}  # владелец
@@ -37,6 +38,8 @@ db = store.connect()
 oz = OzonClient()
 waiting: dict[int, str] = {}  # кто прислал артикул: "card" — карточка, "signals" — сигналы по остаткам
 _signals = {"at": 0.0, "skus": None}
+_losses = {"at": 0.0, "data": None}
+LOSS_DAYS = 14  # минусовые артикулы — за последние 2 недели
 SIGNALS_TTL = 3600  # сигналы по остаткам пересчитываются не чаще раза в час
 
 
@@ -55,7 +58,8 @@ def kb(rows):
 
 MENU = kb([[("📊 Сводка за вчера", "morning")],
            [("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
-           [("🚦 Сигналы по остаткам", "sig")]])
+           [("🚦 Сигналы по остаткам", "sig")],
+           [("📉 Минусовые артикулы", "neg")]])
 SIGNALS_MENU = kb([[("⏰ Пора отгрузить", "sig:s")], [("🔀 Пересорт", "sig:x")],
                    [("💸 Платное хранение", "sig:p")], [("🔎 По артикулу", "sig:a")], [("⬅️ Меню", "menu")]])
 
@@ -239,6 +243,63 @@ async def category_signals(msg: Message, type_id):
         await signal_list(msg, "x", resort, f"Пересорт: {dashboard.short(title, 22)}")
 
 
+def build_losses():
+    """Прибыль по артикулам за 14 дней с рекламой каждого товара; минусовые — по категориям."""
+    end = data_day()
+    start = end - timedelta(days=LOSS_DAYS - 1)
+    revenue = {r[0]: r[1] for r in db.execute("select sku, sum(revenue) from daily where day between ? and ? group by sku",
+                                              (str(start), str(end)))}
+    ads = PerformanceClient().spend_by_sku(start, end, revenue)
+    rows = profit.by_sku(db, oz, Catalog(), end, start=start, ads=ads)
+    cats = {}
+    for sku, x in rows.items():
+        if x["profit"] >= 0:
+            continue
+        s = db.execute("select * from sku where sku = ?", (sku,)).fetchone()
+        x.update(sku=sku, name=s["name"] if s else "", offer_id=x["offer_id"] or (s["offer_id"] if s else None))
+        tid, tname = (s["type_id"], s["type_name"]) if s else ("", "Без категории")
+        c = cats.setdefault(tid or "-", {"type_id": tid or "-", "name": tname or "Без категории", "items": [], "loss": 0.0})
+        c["items"].append(x)
+        c["loss"] += x["profit"]
+    for c in cats.values():
+        c["items"].sort(key=lambda x: x["profit"])
+    return {"start": start, "end": end, "cats": sorted(cats.values(), key=lambda c: c["loss"]), "total": len(rows)}
+
+
+async def losses(msg: Message):
+    if _losses["data"] is None or time.time() - _losses["at"] > SIGNALS_TTL:
+        await msg.answer("Считаю прибыль по каждому артикулу за 2 недели: реализация, реклама, себестоимость. 1–2 минуты…")
+        _losses["data"] = await asyncio.to_thread(build_losses)
+        _losses["at"] = time.time()
+    return _losses["data"]
+
+
+async def losses_menu(msg: Message):
+    d = await losses(msg)
+    n = sum(len(c["items"]) for c in d["cats"])
+    loss = sum(c["loss"] for c in d["cats"])
+    period = f"{d['start']:%d.%m}–{d['end']:%d.%m}"
+    if not n:
+        return await msg.answer(f"За {period} минусовых артикулов нет.", reply_markup=MENU)
+    await msg.answer(f"За {period} в минусе {n} артикулов из {d['total']}, вместе {dashboard.num(loss)} ₽. "
+                     "Выберите категорию:", reply_markup=kb(
+                         [[(f"{dashboard.short(c['name'], 24)} · {len(c['items'])} · {dashboard.num(c['loss'])} ₽",
+                            f"neg:c:{c['type_id']}")] for c in d["cats"][:40]] + [[("⬅️ Меню", "menu")]]))
+
+
+async def losses_category(msg: Message, type_id):
+    d = await losses(msg)
+    c = next((c for c in d["cats"] if c["type_id"] == type_id), None)
+    if not c:
+        return await msg.answer("В этой категории минусовых артикулов нет.", reply_markup=MENU)
+    sub = f"Ozon · {d['start']:%d.%m}–{d['end']:%d.%m} · {len(c['items'])} SKU · {dashboard.num(c['loss'])} ₽"
+    await send_png(msg, lambda p: dashboard.losses_png(dashboard.short(c["name"], 30), sub, c["items"], p),
+                   f"Минусовые: {c['name']}", None)
+    await msg.answer("Нажмите на артикул — откроется его карточка с воронкой:", reply_markup=kb(
+        [[(f"{(x['offer_id'] or x['sku'])[:22]} · {dashboard.num(x['profit'])} ₽", f"p:s:{x['sku']}:week")]
+         for x in c["items"][:40]] + [[("⬅️ Категории", "neg"), ("⬅️ Меню", "menu")]]))
+
+
 def render_morning(prefix):
     return dashboard.morning_png(morning.build(db, oz, data_day()), prefix)
 
@@ -313,6 +374,10 @@ async def on_button(cb: CallbackQuery):
     elif d == "ask_sku":
         waiting[cb.from_user.id] = "card"
         await msg.answer("Пришлите артикул (например OZ353NEW2) или SKU Ozon.")
+    elif d == "neg":
+        await losses_menu(msg)
+    elif d.startswith("neg:c:"):
+        await losses_category(msg, d[6:])
     elif d == "sig":
         await msg.answer("Сигналы по остаткам Ozon: когда отгружать, где пересорт, что уходит в платное хранение. "
                          "Скорость — с учётом сезона. Штуки по кластерам считает бот поставок.", reply_markup=SIGNALS_MENU)

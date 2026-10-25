@@ -308,6 +308,21 @@ def sku_signals_png(s, today, prefix):
                    "● нет остатков и продаж", prefix, SIGNAL_NOTE, per_sheet=16, tiles=tiles)
 
 
+LOSS_NOTE = ("«От Ozon» — продажи по отчёту о реализации за вычетом комиссии и возвратов. Прибыль = от Ozon − логистика\n"
+             "и прочие услуги Ozon (доля артикула) − реклама артикула − себестоимость − УСН 7%.\n"
+             "Реклама: «Оплата за заказ» — точно по заказам, кампании за клики — по выручке их товаров.")
+
+
+def losses_png(title, subtitle, items, prefix):
+    """Минусовые артикулы категории: выручка, реклама, себестоимость, прибыль за период."""
+    cols = [(0.05, "Товар", "left"), (0.45, "от Ozon", "right"), (0.61, "реклама", "right"),
+            (0.78, "себест.", "right"), (0.95, "прибыль", "right")]
+    rows = [([(x["offer_id"] or x["sku"], INK, True), (num(x["revenue"]), INK, False), (num(x["ads"]), INK, False),
+              (num(x["cogs"]), INK, False), (num(x["profit"]), BAD, True)],
+             short(f"{num(x['units'])} шт · {x.get('name') or ''}", 64)) for x in items]
+    return _sheets(title, subtitle, "Артикулы в минусе", cols, rows, "● минусовых нет", prefix, LOSS_NOTE)
+
+
 def _chg(cur, old):
     return (cur - old) / abs(old) * 100 if old else None
 
