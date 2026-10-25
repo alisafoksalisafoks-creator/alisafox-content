@@ -112,22 +112,31 @@ def build(db, oz, day: date):
 
     # себестоимость проданного: доставленные минус возвраты за день × себестоимость из МоегоСклада
     ms = moysklad.Catalog()
-    cogs, no_cost = 0.0, []
-    for r in db.execute("select d.sku, s.offer_id, d.delivered_units - d.returns n from daily d "
-                        "join sku s using (sku) where d.day = ? and d.delivered_units - d.returns != 0", (str(day),)):
-        c = (ms.get(r["offer_id"]) or {}).get("cost", 0)
-        if c > 0:
-            cogs += c * r["n"]
-        else:
-            no_cost.append(r["offer_id"] or r["sku"])
+
+    def cogs_of(d):
+        total, missing = 0.0, []
+        for r in db.execute("select d.sku, s.offer_id, d.delivered_units - d.returns n from daily d "
+                            "join sku s using (sku) where d.day = ? and d.delivered_units - d.returns != 0", (str(d),)):
+            c = (ms.get(r["offer_id"]) or {}).get("cost", 0)
+            if c > 0:
+                total += c * r["n"]
+            else:
+                missing.append(r["offer_id"] or r["sku"])
+        return total, missing
+
+    def net(accrued, cogs):
+        before_tax = accrued - cogs
+        return before_tax - max(0, before_tax) * TAX
+
+    cogs, no_cost = cogs_of(day)
+    profit = net(fin["accrued"], cogs)
+    profit_prev = net(fin_prev["accrued"], cogs_of(day - timedelta(days=1))[0])
     try:  # прибыль по артикулам за 2 месяца — для пометки «к заказу»
         from bot import profit as sku_profit
         profits = sku_profit.by_sku(db, oz, ms, day)
     except Exception:
         log.exception("прибыль по артикулам не посчиталась")
         profits = {}
-    before_tax = fin["accrued"] - cogs
-    profit = before_tax - max(0, before_tax) * TAX
 
     cats = db.execute(
         "select s.type_name, sum(case when d.day = ? then d.revenue end) cur, "
@@ -136,7 +145,7 @@ def build(db, oz, day: date):
         (str(day), str(day - timedelta(days=7)), str(day), str(day), str(day - timedelta(days=7)))).fetchall()
 
     return {
-        "day": day, "orders": t, "cogs": cogs, "profit": profit, "no_cost": no_cost, "orders_prev": t_prev, "orders_week": t_week,
+        "day": day, "orders": t, "cogs": cogs, "profit": profit, "profit_prev": profit_prev, "no_cost": no_cost, "orders_prev": t_prev, "orders_week": t_week,
         "buyout": buyout(b), "buyout_prev": buyout(b_prev),
         "fin": fin, "fin_prev": fin_prev, "ads": ads, "ads_prev": ads_prev,
         "spend": spend, "spend_prev": spend_prev,

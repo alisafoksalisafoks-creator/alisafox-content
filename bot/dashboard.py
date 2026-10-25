@@ -315,7 +315,7 @@ def morning_png(m, prefix):
     p.tiles([
         {"name": "Заказы, ₽", "value": o["revenue"], "delta": _chg(o["revenue"], ow["revenue"])},
         {"name": "Заказы, шт", "value": o["ordered_units"], "delta": _chg(o["ordered_units"], ow["ordered_units"])},
-        {"name": "Чистая прибыль, ₽", "value": m["profit"], "plain": True},
+        {"name": "Чистая прибыль, ₽", "value": m["profit"], "delta": _chg(m["profit"], m.get("profit_prev"))},
         {"name": "Общий ДРР, %", "value": m["drr"], "delta": _chg(m["drr"], m["drr_prev"]), "lower_is_better": True},
         {"name": "Реклама, ₽", "value": m["spend"], "delta": _chg(m["spend"], m["spend_prev"]), "lower_is_better": True},
         {"name": "Выкуп 30 дн, %", "value": m["buyout"], "delta": _chg(m["buyout"], m["buyout_prev"])},
@@ -329,7 +329,7 @@ def morning_png(m, prefix):
     p.table("Категории: заказы за день", cols, rows)
     done(p, f"Прибыль = начислено Ozon {num(fin['accrued'])} − себестоимость {num(m['cogs'])} − УСН 7%."
          + (f" Нет себестоимости: {', '.join(m['no_cost'][:4])}{'…' if len(m['no_cost']) > 4 else ''}." if m["no_cost"] else "")
-         + "\nЗаказы и выкуп — к тому же дню прошлой недели, реклама — к позавчера.")
+         + "\nЗаказы и выкуп — к тому же дню прошлой недели, прибыль и реклама — к позавчера.")
 
     # 2. Реклама и удержания
     p = sheet(2, "Реклама и удержания", 2, len(groups) + 1 + len(services) + 1)
