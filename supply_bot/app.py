@@ -314,7 +314,7 @@ async def scheduler(bot):
 
 async def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    bot = Bot(os.environ["SUPPLY_BOT_TOKEN"].strip(), default=DefaultBotProperties(parse_mode="HTML"))
+    bot = Bot(os.environ["TELEGRAM_SUPPLY_BOT_TOKEN"].strip(), default=DefaultBotProperties(parse_mode="HTML"))
     if os.environ.get("SUPPLY_BOT_SCHEDULE", "1") == "1":
         asyncio.create_task(scheduler(bot))
     await dp.start_polling(bot)

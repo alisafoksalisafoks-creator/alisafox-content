@@ -68,7 +68,7 @@ sudo systemctl enable --now supply-bot
 
 Доступы:
 
-* новый бот у @BotFather → `SUPPLY_BOT_TOKEN`;
+* новый бот у @BotFather → `TELEGRAM_SUPPLY_BOT_TOKEN`;
 * chat id владельца и команды → `SUPPLY_BOT_CHATS` (бот подскажет id на /start);
 * ключ Ozon Seller «только чтение», токен «Моего склада» «только чтение»;
 * сервисный аккаунт Google: ключ JSON на сервер, его почте — доступ «Читатель» к таблице AlisaFox и таблице квантов.
