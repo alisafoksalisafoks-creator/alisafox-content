@@ -268,7 +268,7 @@ async def on_button(c: CallbackQuery):
         await m.answer("Выберите направление:", reply_markup=wh_keyboard(plan, int(d[7:]), "fixwh"))
     elif d == "fixwh:other":
         S.wait[m.chat.id] = {"step": "fix_wh_name"}
-        await m.answer("Введите название кластера, как в Ozon, например <code>Казань</code>. Для Москвы — склад, например <code>НОГИНСК_РФЦ</code>.")
+        await m.answer("Введите название кластера, как в Ozon, например <code>Казань</code>. ")
     elif d.startswith("fixwh:"):
         wh = _wh_by_index(plan, int(d[6:]))
         S.wait[m.chat.id] = {"step": "fix_offer", "wh": wh}
@@ -306,7 +306,7 @@ async def on_text(m: Message):
         known = {norm(x): x for x in calc.directions_of(plan, S.snap.wh_cluster)}
         wh = known.get(norm(text)) or next((v for k, v in known.items() if norm(text) in k), None)
         if not wh:
-            return await m.answer("Такого направления нет: нужен кластер Ozon, а для Москвы — один из 5 основных складов.")
+            return await m.answer("Такого кластера нет. Проверьте название.")
         S.wait[m.chat.id] = {"step": "fix_offer", "wh": wh}
         return await m.answer(f"Направление <b>{wh}</b>. Введите артикул.")
     if w["step"] == "fix_offer":

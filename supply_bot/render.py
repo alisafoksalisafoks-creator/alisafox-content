@@ -38,7 +38,7 @@ def summary(plan, taken_at=""):
         f"<b>Распределение FBO на {plan.ship_date:%d.%m}</b>",
         f"Данные на {escape(taken_at)}" if taken_at else "",
         "",
-        f"Везём <b>{fmt(qty)} шт</b> в <b>{fmt(boxes)} коробах</b> по {len(wh)} направлениям, срочно {fmt(urgent)} шт.",
+        f"Везём <b>{fmt(qty)} шт</b> в <b>{fmt(boxes)} коробах</b> по {len(wh)} кластерам, срочно {fmt(urgent)} шт.",
     ]
     if plan.empty_whole:
         lines.append("❗ Рекомендуется отгрузка в кластер: " + ", ".join(escape(x["cluster"]) for x in plan.empty_whole)
@@ -59,7 +59,7 @@ def summary(plan, taken_at=""):
     no_box = sum(1 for x in plan.lines if x.qty and not x.boxes)
     if no_box:
         lines.append(f"⚠️ Нет кванта коробов: {no_box} строк, количество без округления.")
-    lines += ["", "<b>По направлениям</b> (кластер; Москва — по складам)"]
+    lines += ["", "<b>По кластерам</b>"]
     for name, items in wh.items():
         lines.append(f"{escape(name)}: {fmt(sum(x.qty for x in items))} шт, {sum(x.box_count for x in items)} кор., {len(items)} арт.")
     return chunks([x for x in lines if x is not None])
@@ -70,8 +70,8 @@ def warehouse(plan, name):
     if not items:
         return [f"В {escape(name)} сейчас везти нечего."]
     where = items[0].cluster if items[0].cluster != name else "кластер"
-    ship = f"склад приёмки: {escape(items[0].ship_to)}" if items[0].ship_to and items[0].ship_to != name else ""
-    head = [f"<b>{escape(name)}</b> · {escape(where)}" + (f"\n{ship} (подсказка — наш основной склад кластера)" if ship else ""),
+    ship = f"склад приёмки: {escape(items[0].ship_to)}" if items[0].ship_to else ""
+    head = [f"<b>{escape(name)}</b> · {escape(where)}" + (f"\n{ship} (подсказка)" if ship else ""),
             f"{fmt(sum(x.qty for x in items))} шт, {sum(x.box_count for x in items)} коробов, отгрузка {plan.ship_date:%d.%m}", ""]
     rows = []
     for ln in sorted(items, key=lambda x: (-["обычно", "наверх", "срочно"].index(x.priority), -x.qty)):

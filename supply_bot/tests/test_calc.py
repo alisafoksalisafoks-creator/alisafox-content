@@ -47,8 +47,9 @@ def test_need_per_warehouse_rounded_to_boxes_and_limited_by_our_stock():
              ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("31×23×19,5", 50)]})
     plan = calc.build(s)
     by = {ln.warehouse: ln for ln in plan.lines}
-    # Москва: 10/дн × (7 + 30) − 50 = 320 → полные короба по 50
-    assert by[MSK1].need == 320 and by[MSK1].qty % 50 == 0 and by[MSK1].box_count == by[MSK1].qty // 50
+    msk = by["Москва, МО и Дальние регионы"]
+    # Москва — кластер: 10/дн × (7 + 30) − 50 = 320 → полные короба по 50
+    assert msk.need == 320 and msk.qty % 50 == 0 and msk.box_count == msk.qty // 50 and msk.ship_to == MSK1
     # Казань — направление «кластер»: 2/дн × (9 + 30) − 10 = 68 → 50 или 100, только целые короба
     assert by["Казань"].qty in (50, 100) and by["Казань"].ship_to == KZN
 
@@ -90,14 +91,11 @@ def test_statuses_buyout_and_paid_storage():
     assert "не отгружать" in reasons["OZ4"] and plan.paid[0]["days"] == 10
 
 
-def test_mandatory_moscow_warehouse_gets_start_line_and_empty_cluster_signal():
+def test_empty_cluster_signal():
     post = sales("OZ1", MSK1, 10) + sales("OZ2", MSK2, 3) + sales("OZ1", KZN, 1)
     s = snap(post, stocks=[("OZ1", MSK1, 0, 0), ("OZ2", MSK2, 500, 0), ("OZ1", KZN, 5, 0)],
              ms={"OZ1": 5000, "OZ2": 5000}, units={"OZ1": unit("OZ1"), "OZ2": unit("OZ2")})
     plan = calc.build(s)
-    assert set(plan.mandatory["Москва, МО и Дальние регионы"]) == {MSK1, MSK2}
-    start = [ln for ln in plan.lines if ln.offer == "OZ1" and ln.warehouse == MSK2]
-    assert start and start[0].priority == "срочно"
     assert {x["cluster"] for x in plan.empty_whole} == {"Санкт-Петербург и СЗО"}
 
 
@@ -105,7 +103,8 @@ def test_manual_override_rounds_to_nearest_full_box():
     s = snap(sales("OZ1", MSK1, 10), ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")},
              boxes={"OZ1": [("43×29×35", 200), ("31×23×19,5", 50)]})
     for typed, expect in ((237, 250), (220, 200), (0, 0)):
-        ln = next(x for x in calc.build(s, {("OZ1", MSK1): typed}).lines if x.warehouse == MSK1)
+        cl = CLUSTERS[MSK1]
+        ln = next(x for x in calc.build(s, {("OZ1", cl): typed}).lines if x.warehouse == cl)
         assert ln.manual and ln.qty == expect and "вручную" in ln.flags
 
 
@@ -137,8 +136,9 @@ def test_cluster_is_one_direction_outside_moscow():
     assert spb[0].need == 10 * (3 + 30) - 40
 
 
-def test_moscow_need_split_between_main_warehouses_by_our_sales():
-    s = snap(sales("OZ1", MSK1, 6) + sales("OZ1", MSK2, 2), ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")})
+def test_moscow_is_one_cluster():
+    s = snap(sales("OZ1", MSK1, 6) + sales("OZ1", MSK2, 2), stocks=[("OZ1", MSK2, 100, 0)],
+             ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")})
     plan = calc.build(s)
-    by = {ln.warehouse: ln for ln in plan.lines}
-    assert by[MSK1].need == 6 * 37 and by[MSK2].need == 2 * 37
+    msk = [ln for ln in plan.lines if ln.cluster.startswith("Москва")]
+    assert len(msk) == 1 and msk[0].need == 8 * 37 - 100

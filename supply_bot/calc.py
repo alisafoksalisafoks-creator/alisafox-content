@@ -1,7 +1,7 @@
 """Расчёт поставки FBO по кластерам Ozon.
 
-Направление поставки — кластер целиком (решение владельца 25.10.2026). Исключение — Москва: там рекомендация
-на 5 основных складов, потребность кластера делится между ними пропорционально нашим отгрузкам с каждого.
+Направление поставки — только кластер целиком, без отдельных складов (решение владельца 25.10.2026).
+Склад приёмки — подсказка: наш основной склад кластера по отгрузкам за 30 дней.
 Потребность кластера = отгрузки FBO из кластера за 14 дн ÷ 14 × коэф. сезона × (L + 30) − (доступно + в пути).
 Дальше: статусы и стопы → лимит «Моего склада» с выравниванием дней запаса →
 полные моно-короба под каждое направление → пустые кластеры и предупреждения.
@@ -34,7 +34,7 @@ class Snapshot:
 class Line:
     offer: str
     root: str
-    warehouse: str            # направление: название кластера, а в Москве — склад
+    warehouse: str            # направление: название кластера
     cluster: str
     sales14: int
     sales30: int
@@ -49,7 +49,7 @@ class Line:
     priority: str = "обычно"
     flags: list = field(default_factory=list)
     manual: bool = False
-    ship_to: str = ""         # склад приёмки: в Москве — сам склад, в кластере — подсказка (наш основной склад)
+    ship_to: str = ""         # склад приёмки — подсказка: наш основной склад кластера
 
     @property
     def have(self):
@@ -80,7 +80,6 @@ class Plan:
     season_notes: list = field(default_factory=list)
     duplicates: list = field(default_factory=list)
     ff: dict = field(default_factory=dict)          # {ключ МС: {article, stock, unshipped, free, used}}
-    mandatory: dict = field(default_factory=dict)   # {кластер: [склады]}
     notes: list = field(default_factory=list)
 
     def by_warehouse(self):
@@ -198,14 +197,10 @@ def build(snap, overrides=None):
         rec["used"] = 0
     plan.ff = ms_by
 
-    # --- обязательные склады: топ-N по нашим отгрузкам FBO за 30 дней ---
+    # --- отгрузки по кластерам: для подсказки склада приёмки и доли кластера ---
     by_cluster = defaultdict(list)
     for wh, q in wh_sales30.items():
         by_cluster[cluster_of.get(wh, "")].append((q, wh))
-    for cl, items in by_cluster.items():
-        n = config.mandatory_count(cl)
-        if n:
-            plan.mandatory[cl] = [wh for _, wh in sorted(items, reverse=True)[:n]]
 
     # --- проверки по артикулу ---
     offers = {k[0] for k in list(s30) + list(stock)}
@@ -281,35 +276,10 @@ def build(snap, overrides=None):
         speed = s14c.get((offer, cl), 0) / config.SALES_DAYS * e["k"]
         lead = config.lead_days(cl)
         need = max(0, round(speed * (lead + config.TARGET_DAYS) - st["available"] - st["transit"]))
-        whs = plan.mandatory.get(cl)
-        if not whs:
-            lines[(offer, cl)] = Line(
-                offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
-                sales14=s14c.get((offer, cl), 0), sales30=s30c.get((offer, cl), 0), speed=speed,
-                available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"])
-            continue
-        # Москва: потребность кластера делим между основными складами по их доле в наших отгрузках
-        weight = {wh: wh_sales30.get(wh, 0) for wh in whs}
-        total_w = sum(weight.values())
-        group = []
-        for wh in whs:
-            share = weight[wh] / total_w if total_w else 1 / len(whs)
-            sw = stock.get((offer, wh), zero)
-            ln = Line(offer=e["name"], root=e["u"]["root"], warehouse=wh, cluster=cl, ship_to=wh,
-                      sales14=s14.get((offer, wh), 0), sales30=s30.get((offer, wh), 0), speed=speed * share,
-                      available=sw["available"], transit=sw["transit"], lead=lead, season=e["k"],
-                      need=max(0, round(speed * share * (lead + config.TARGET_DAYS) - sw["available"] - sw["transit"])))
-            if speed and ln.have <= 0:
-                ln.flags.append("основной склад: товар закончился" if ln.sales14 else
-                                "основной склад пуст — старт, количество оценочное")
-                ln.priority = "срочно"
-            lines[(offer, wh)] = ln
-            group.append(ln)
-        # остаток на остальных складах кластера тоже работает: в сумме не больше потребности кластера
-        total_need = sum(ln.need for ln in group)
-        if total_need > need:
-            for ln in group:
-                ln.need = int(ln.need * need / total_need)
+        lines[(offer, cl)] = Line(
+            offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
+            sales14=s14c.get((offer, cl), 0), sales30=s30c.get((offer, cl), 0), speed=speed,
+            available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"])
 
     for ln in lines.values():
         if ln.days is not None and ln.days < ln.lead:
@@ -339,9 +309,9 @@ def build(snap, overrides=None):
         if (offer, wh) in lines or offer not in eligible or wh not in directions:
             continue
         e, cl = eligible[offer], directions[wh]
-        st = (stock if wh != cl else stock_c).get((offer, wh), zero)
+        st = stock_c.get((offer, wh), zero)
         ln = lines[(offer, wh)] = Line(
-            offer=e["name"], root=e["u"]["root"], warehouse=wh, cluster=cl, ship_to=wh if wh != cl else top_wh.get(cl, ""),
+            offer=e["name"], root=e["u"]["root"], warehouse=wh, cluster=cl, ship_to=top_wh.get(cl, ""),
             sales14=0, sales30=0, speed=0, available=st["available"], transit=st["transit"],
             lead=config.lead_days(cl), need=0, season=e["k"])
         groups[e["key"]].append(ln)
@@ -433,11 +403,8 @@ def build(snap, overrides=None):
 
 
 def directions_of(plan, cluster_of):
-    """{направление: кластер}: кластеры целиком, а вместо Москвы — её основные склады."""
-    out = {cl: cl for cl in set(cluster_of.values()) if cl and cl not in plan.mandatory}
-    for cl, whs in plan.mandatory.items():
-        out.update({wh: cl for wh in whs})
-    return out
+    """{направление: кластер}: направление — кластер целиком."""
+    return {cl: cl for cl in set(cluster_of.values()) if cl}
 
 
 _PRIO = {"обычно": 0, "наверх": 1, "срочно": 2}
