@@ -7,7 +7,11 @@ import httpx
 BASE = "https://api.moysklad.ru/api/remap/1.2"
 # учёт в МоёмСкладе ведётся по корневому артикулу: OZ204NEW, OZ204NEW2 на Ozon = OZ204 на складе
 RELAUNCH = re.compile(r"NEW\d*$")
-DOUBLE = re.compile(r"^ДБ\s*")
+DOUBLE = re.compile(r"^ДБ\s*")  # «ДБ …» — рабочие тестовые артикулы, в аналитике не участвуют
+
+
+def is_test(offer_id):
+    return bool(DOUBLE.match((offer_id or "").strip().upper()))
 
 
 def _rows(http, path):
@@ -47,6 +51,10 @@ def load_fallback(path=FALLBACK):
     return out
 
 
+# себестоимость в МоёмСкладе ошибочная, пока не поправят — берём из таблицы (владелец 2026-10-25: OZ496-H56 = 224 ₽, в МС 1314)
+TABLE_FIRST = {"OZ496-H56"}
+
+
 class Catalog:
     """Себестоимость за штуку (₽) и свой остаток по артикулу Ozon."""
 
@@ -81,10 +89,11 @@ class Catalog:
                 if r["cost"] <= 0 < item["cost"]:
                     r["cost"] = item["cost"]
 
-        # нет себестоимости в МоёмСкладе (старые артикулы) — берём из выгрузки таблицы юнит-экономики
+        # нет себестоимости в МоёмСкладе (старые артикулы) — берём из выгрузки таблицы юнит-экономики;
+        # для артикулов из TABLE_FIRST таблица главнее (в МоёмСкладе себестоимость пока ошибочная)
         for key, cost in load_fallback().items():
             r = self.roots.setdefault(self.root(key), {"stock": 0, "in_transit": 0, "cost": 0, "variants": []})
-            if r["cost"] <= 0:
+            if r["cost"] <= 0 or self.root(key) in TABLE_FIRST:
                 r["cost"], r["cost_from"] = cost, "таблица"
 
     @staticmethod

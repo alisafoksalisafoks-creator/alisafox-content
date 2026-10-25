@@ -8,6 +8,8 @@ import json
 import os
 from datetime import date, timedelta
 
+from bot.sources.moysklad import is_test
+
 LEAD_DAYS = 7      # от отгрузки до приёмки на складе Ozon, как в боте поставок
 SOON_DAYS = 14     # «пора отгрузить», если отгрузить надо в ближайшие 14 дней (запас < 21 дня)
 EXCESS_DAYS = 60   # запас дольше 60 дней — перебор, риск платного хранения
@@ -74,6 +76,8 @@ def build(db, stocks, day: date, season=None, turnover=None, catalog=None):
         else:
             base = ads_total / mean_coef(season, tname, day - timedelta(days=27), 28)
         first = next(iter(clusters.values()))
+        if is_test(first["offer_id"]):
+            continue
         own = (catalog.get(first["offer_id"]) or {}).get("stock", 0) if catalog else None
         s = {"sku": sku, "offer_id": first["offer_id"], "name": first["name"], "type_name": tname,
              "speed": base * coef(season, tname, today), "speed_next": base * coef(season, tname, today + timedelta(days=30)),

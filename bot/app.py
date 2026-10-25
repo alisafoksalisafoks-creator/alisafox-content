@@ -25,7 +25,7 @@ from bot import env  # noqa: F401  (подхватывает .env до чтен�
 from bot import cards, dashboard, morning, profit, restock, signals, store
 from bot.category_report import MSK
 from bot.sources import gsheet_costs
-from bot.sources.moysklad import Catalog
+from bot.sources.moysklad import Catalog, is_test
 from bot.sources.ozon import OzonClient
 from bot.sources.performance import PerformanceClient
 
@@ -153,7 +153,9 @@ def top_rows(type_id, period, limit=8):
     stocks = oz.stocks()
     n = (period[1] - period[0]).days + 1
     rows = []
-    for r in store.top_skus(db, *period, type_id, limit):
+    for r in store.top_skus(db, *period, type_id, limit + 5):
+        if is_test(r["offer_id"]) or len(rows) >= limit:
+            continue
         prev = store.totals(db, period[0] - timedelta(days=n), period[1] - timedelta(days=n), sku=r["sku"])
         lab, col = dashboard.delta_style(cards.change(r["units"], prev["ordered_units"]))
         speed = store.totals(db, period[1] - timedelta(days=13), period[1], sku=r["sku"])["ordered_units"] / 14
@@ -257,6 +259,8 @@ def build_losses():
         if x["profit"] >= 0:
             continue
         s = db.execute("select * from sku where sku = ?", (sku,)).fetchone()
+        if is_test(x["offer_id"] or (s["offer_id"] if s else "")):
+            continue
         x.update(sku=sku, name=s["name"] if s else "", offer_id=x["offer_id"] or (s["offer_id"] if s else None))
         tid, tname = (s["type_id"], s["type_name"]) if s else ("", "Без категории")
         c = cats.setdefault(tid or "-", {"type_id": tid or "-", "name": tname or "Без категории", "items": [], "loss": 0.0})

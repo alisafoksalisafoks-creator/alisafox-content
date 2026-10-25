@@ -99,7 +99,7 @@ def build(db, oz, day: date):
     spend = sum(g["spend"] for g in ads.values())
     spend_prev = sum(g["spend"] for g in ads_prev.values())
 
-    turn = turnover(oz)
+    turn = [x for x in turnover(oz) if not moysklad.is_test(x.get("offer_id"))]
     ending = sorted([x for x in turn if x["ads"] >= 0.5 and x["idc"] < 20], key=lambda x: -x["ads"])
     excess = sorted([x for x in turn if x["turnover_grade"] in ("GRADES_RED", "GRADES_CRITICAL") and x["current_stock"] > 0],
                     key=lambda x: -x["current_stock"])
@@ -109,6 +109,8 @@ def build(db, oz, day: date):
         "select sku from daily where day >= ? group by sku order by sum(revenue) desc limit 300",
         (str(day - timedelta(days=29)),))]
     rating_drops = content_ratings(db, oz, day, top)
+    if rating_drops:
+        rating_drops = [r for r in rating_drops if not moysklad.is_test(r["offer_id"])]
 
     # себестоимость проданного: доставленные минус возвраты за день × себестоимость из МоегоСклада
     ms = moysklad.Catalog()
@@ -117,6 +119,8 @@ def build(db, oz, day: date):
         total, missing = 0.0, []
         for r in db.execute("select d.sku, s.offer_id, d.delivered_units - d.returns n from daily d "
                             "join sku s using (sku) where d.day = ? and d.delivered_units - d.returns != 0", (str(d),)):
+            if moysklad.is_test(r["offer_id"]):
+                continue
             c = (ms.get(r["offer_id"]) or {}).get("cost", 0)
             if c > 0:
                 total += c * r["n"]
