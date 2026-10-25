@@ -26,10 +26,36 @@ log = logging.getLogger("supply_bot")
 FRESH_HOURS = 3          # снимок старше — пересобираем перед расчётом
 WH_PAGE = 12             # складов на одной странице кнопок
 OVERRIDES = config.DATA_DIR / "overrides.json"
+USERS = config.DATA_DIR / "users.json"   # кого пустили кнопкой «Доступ»: {chat_id: имя}
+
+
+def _ids(name):
+    return [int(x.strip()) for x in os.environ.get(name, "").split(",") if x.strip()]
+
+
+def env_chats():
+    return set(_ids("SUPPLY_BOT_CHATS"))
+
+
+def admins():
+    """Кто управляет доступом: SUPPLY_BOT_ADMINS, а если пусто — первый id из SUPPLY_BOT_CHATS (владелец)."""
+    return set(_ids("SUPPLY_BOT_ADMINS")) or set(_ids("SUPPLY_BOT_CHATS")[:1])
+
+
+def load_users():
+    try:
+        return {int(k): v for k, v in json.loads(USERS.read_text(encoding="utf-8")).items()}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_users(users):
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    USERS.write_text(json.dumps({str(k): v for k, v in users.items()}, ensure_ascii=False), encoding="utf-8")
 
 
 def allowed_chats():
-    return {int(x.strip()) for x in os.environ.get("SUPPLY_BOT_CHATS", "").split(",") if x.strip()}
+    return env_chats() | set(load_users())
 
 
 class State:
@@ -40,6 +66,7 @@ class State:
         self.plan = None
         self.lock = asyncio.Lock()
         self.wait = {}   # chat_id → {"step": ..., ...} — чего ждём от владельца текстом
+        self.names = {}  # chat_id → имя того, кто просил доступ
         try:
             raw = json.loads(OVERRIDES.read_text(encoding="utf-8"))
             self.overrides = {(o, w): q for o, w, q in raw}
@@ -97,6 +124,11 @@ def kb(rows):
 
 
 START = kb([[("📦 FBO", "fbo"), ("🚚 FBS", "fbs")]])
+START_ADMIN = kb([[("📦 FBO", "fbo"), ("🚚 FBS", "fbs")], [("👥 Доступ", "acc")]])
+
+
+def start_kb(chat_id):
+    return START_ADMIN if chat_id in admins() else START
 FBO = kb([
     [("📊 Распределение по магазину", "plan")],
     [("🔎 По артикулу", "ask_offer"), ("🏬 По складу", "whs:0")],
@@ -134,12 +166,50 @@ async def on_error(event: ErrorEvent):
                          reply_markup=START)
 
 
+ASKED = set()   # кто уже просил доступ с момента запуска — владельцу пишем один раз
+
+
+def _who(user):
+    name = " ".join(x for x in (user.first_name, user.last_name) if x) or "без имени"
+    return name + (f" (@{user.username})" if user.username else "")
+
+
 @dp.message(CommandStart())
 async def on_start(m: Message):
     if not _guard(m.chat.id):
-        return await m.answer(f"Нет доступа. Ваш chat id: <code>{m.chat.id}</code> — передайте владельцу.")
+        await m.answer(f"Нет доступа. Ваш chat id: <code>{m.chat.id}</code>.\n"
+                       "Я отправил владельцу запрос — когда он разрешит, нажмите /start ещё раз.")
+        if m.chat.id not in ASKED:
+            ASKED.add(m.chat.id)
+            who = escape(_who(m.from_user))
+            for admin in admins():
+                await m.bot.send_message(admin, f"🔐 Просит доступ к боту поставок: <b>{who}</b>, id <code>{m.chat.id}</code>",
+                                         reply_markup=kb([[("✅ Пустить", f"accok:{m.chat.id}"),
+                                                           ("❌ Отказать", f"accno:{m.chat.id}")]]))
+            S.names[m.chat.id] = _who(m.from_user)
+        return
     S.wait.pop(m.chat.id, None)
-    await m.answer("Бот поставок AlisaFox. Выберите схему:", reply_markup=START)
+    await m.answer("Бот поставок AlisaFox. Выберите схему:", reply_markup=start_kb(m.chat.id))
+
+
+def access_screen():
+    users = load_users()
+    lines = ["👥 <b>Доступ к боту</b>", "", "Из настроек сервера (кнопкой не убрать):"]
+    lines += [f"• <code>{x}</code>" + (" — управляет доступом" if x in admins() else "") for x in sorted(env_chats())]
+    lines += ["", "Добавлены кнопкой:" if users else "Кнопкой пока никого не добавляли."]
+    lines += [f"• {escape(n)} — <code>{x}</code>" for x, n in users.items()]
+    lines += ["", "Новый человек пишет боту /start — вам придёт запрос с кнопкой «Пустить». "
+                  "Или нажмите «Добавить по ID»."]
+    rows = [[("➕ Добавить по ID", "accadd")]]
+    rows += [[(f"❌ Убрать {n[:30]}", f"accdel:{x}")] for x, n in users.items()]
+    rows.append([("⬅️ Назад", "start")])
+    return "\n".join(lines), kb(rows)
+
+
+def grant(chat_id, name):
+    users = load_users()
+    users[chat_id] = name
+    save_users(users)
 
 
 @dp.callback_query()
@@ -150,7 +220,9 @@ async def on_button(c: CallbackQuery):
     m, d = c.message, c.data
     S.wait.pop(m.chat.id, None)
     if d == "start":
-        return await m.answer("Выберите схему:", reply_markup=START)
+        return await m.answer("Выберите схему:", reply_markup=start_kb(m.chat.id))
+    if d.startswith("acc"):
+        return await on_access(c, d)
     if d == "fbs":
         return await m.answer("FBS: правила расчёта пропишем отдельно. Пока здесь пусто.",
                               reply_markup=kb([[("⬅️ Назад", "start")]]))
@@ -211,9 +283,19 @@ async def on_text(m: Message):
         return
     w = S.wait.get(m.chat.id)
     if not w:
-        return await m.answer("Выберите действие:", reply_markup=START)
-    plan = await S.ensure(m)
+        return await m.answer("Выберите действие:", reply_markup=start_kb(m.chat.id))
     text = m.text.strip()
+    if w["step"] == "acc_id":
+        try:
+            new = int(text.replace(" ", ""))
+        except ValueError:
+            return await m.answer("Нужен chat id — только цифры, например <code>923121806</code>. "
+                                  "Человек увидит его, если напишет боту /start.")
+        S.wait.pop(m.chat.id)
+        grant(new, S.names.get(new, f"id {new}"))
+        body, markup = access_screen()
+        return await m.answer(f"✅ Добавил <code>{new}</code>.\n\n" + body, reply_markup=markup)
+    plan = await S.ensure(m)
     if w["step"] == "offer":
         S.wait.pop(m.chat.id)
         return await send(m, render.offer(plan, text, S.snap.unit),
@@ -237,6 +319,38 @@ async def on_text(m: Message):
             return await m.answer("Нужно целое число, например 150.")
         S.wait.pop(m.chat.id)
         await apply_fix(m, w["offer"], w["wh"], qty)
+
+
+async def on_access(c, d):
+    """Кнопки «Доступ»: только для тех, кто управляет доступом."""
+    m = c.message
+    if m.chat.id not in admins():
+        return await m.answer("Управлять доступом может только владелец.", reply_markup=START)
+    if d == "acc":
+        body, markup = access_screen()
+        return await m.answer(body, reply_markup=markup)
+    if d == "accadd":
+        S.wait[m.chat.id] = {"step": "acc_id"}
+        return await m.answer("Введите chat id человека (цифры). Он увидит свой id, если напишет боту /start.")
+    who = int(d.split(":")[1])
+    if d.startswith("accok:"):
+        grant(who, S.names.get(who, f"id {who}"))
+        await m.edit_reply_markup(reply_markup=None)
+        await m.answer(f"✅ Пустил <code>{who}</code>.")
+        try:
+            await m.bot.send_message(who, "Доступ к боту поставок открыт. Нажмите /start.")
+        except Exception:  # noqa: BLE001 — человек мог заблокировать бота
+            pass
+    elif d.startswith("accno:"):
+        await m.edit_reply_markup(reply_markup=None)
+        await m.answer(f"Отказано: <code>{who}</code>.")
+    elif d.startswith("accdel:"):
+        users = load_users()
+        users.pop(who, None)
+        save_users(users)
+        S.wait.pop(who, None)
+        body, markup = access_screen()
+        await m.answer(f"Убрал <code>{who}</code>.\n\n" + body, reply_markup=markup)
 
 
 async def apply_fix(m, offer, wh, qty):
