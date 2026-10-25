@@ -56,7 +56,7 @@ def kb(rows):
 MENU = kb([[("📊 Сводка за вчера", "morning")],
            [("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
            [("🚚 Поставки", "sup")]])
-SUPPLY_MENU = kb([[("🏬 По складу", "sup:w")], [("🔎 По артикулу", "sup:a")],
+SUPPLY_MENU = kb([[("🗺 По кластеру", "sup:w")], [("🔎 По артикулу", "sup:a")],
                   [("📋 Что отгрузить", "sup:l")], [("⬅️ Меню", "menu")]])
 
 
@@ -181,7 +181,7 @@ def build_supply():
 
 async def supply_rows(msg: Message):
     if _supply["rows"] is None or time.time() - _supply["at"] > SUPPLY_TTL:
-        await msg.answer("Считаю остатки по всем складам и свой склад, 1–2 минуты…")
+        await msg.answer("Считаю остатки по всем кластерам и свой склад, 1–2 минуты…")
         _supply["rows"] = await asyncio.to_thread(build_supply)
         _supply["at"] = time.time()
     return _supply["rows"]
@@ -207,9 +207,9 @@ async def supply_cluster(msg: Message, i):
     c = restock.by_cluster(rows)[i]
     part = sorted((r for r in rows if r["cluster"] == c["cluster"]), key=lambda r: (r["days"] or 0, -r["need"]))
     await send_png(msg, lambda p: dashboard.supply_png(
-        f"Склад {c['cluster']}", f"Что везти · {c['skus']} SKU · нужно {c['need']} шт, везти {c['ship']} шт",
-        part, p, by="offer"), f"Поставка на склад {c['cluster']}",
-        kb([[("🏬 Другой склад", "sup:w"), ("⬅️ Поставки", "sup")]]))
+        f"Кластер {c['cluster']}", f"Что везти · {c['skus']} SKU · нужно {c['need']} шт, везти {c['ship']} шт",
+        part, p, by="offer"), f"Поставка в кластер {c['cluster']}",
+        kb([[("🗺 Другой кластер", "sup:w"), ("⬅️ Поставки", "sup")]]))
 
 
 async def supply_sku(msg: Message, sku):
@@ -220,7 +220,7 @@ async def supply_sku(msg: Message, sku):
         part = restock.allocate(restock.plan(await asyncio.to_thread(restock.cluster_stocks, oz, [sku])),
                                 await asyncio.to_thread(Catalog))
     if not part:
-        return await msg.answer("По этому артикулу нет остатков и продаж на складах Ozon.", reply_markup=SUPPLY_MENU)
+        return await msg.answer("По этому артикулу нет остатков и продаж в кластерах Ozon.", reply_markup=SUPPLY_MENU)
     part.sort(key=lambda r: (r["days"] or 0, -r["need"]))
     offer, own = part[0]["offer_id"], max(0, (Catalog.get_cached(part[0]["offer_id"]) if False else part[0].get("own", 0)) or 0)
     need = sum(r["need"] for r in part if r["status"] in ("urgent", "low"))
@@ -311,20 +311,20 @@ async def on_button(cb: CallbackQuery):
         waiting[cb.from_user.id] = "card"
         await msg.answer("Пришлите артикул (например OZ353NEW2) или SKU Ozon.")
     elif d == "sup":
-        await msg.answer("Поставки на склады Ozon. Норма — запас на 20 дней, везём до 30.", reply_markup=SUPPLY_MENU)
+        await msg.answer("Поставки по кластерам Ozon. Норма — запас кластера на 20 дней, везём до 30.", reply_markup=SUPPLY_MENU)
     elif d == "sup:w":
         cl = restock.by_cluster(await supply_rows(msg))
         if not cl:
-            return await msg.answer("Везти никуда не нужно: на всех складах запас больше 20 дней.",
+            return await msg.answer("Везти никуда не нужно: во всех кластерах запас больше 20 дней.",
                                     reply_markup=SUPPLY_MENU)
-        await msg.answer("Склады, куда пора везти. «Везти X из Y»: Y — нужно до 30 дней, X — есть на своём складе:", reply_markup=kb(
+        await msg.answer("Кластеры, куда пора везти. «Везти X из Y»: Y — нужно до 30 дней, X — есть на своём складе:", reply_markup=kb(
             [[(f"{'🔴' if c['urgent'] else '🟠'} {c['cluster'][:22]} · везти {c['ship']} из {c['need']} шт", f"sup:w:{i}")]
              for i, c in enumerate(cl[:40])] + [[("⬅️ Поставки", "sup")]]))
     elif d.startswith("sup:w:"):
         await supply_cluster(msg, int(d[6:]))
     elif d == "sup:a":
         waiting[cb.from_user.id] = "supply"
-        await msg.answer("Пришлите артикул — покажу, на какие склады и сколько везти.")
+        await msg.answer("Пришлите артикул — покажу, в какие кластеры и сколько везти.")
     elif d == "sup:l":
         sk = restock.by_sku(await supply_rows(msg))
         if not sk:
@@ -341,7 +341,7 @@ async def on_button(cb: CallbackQuery):
         _, t, key, kind = d.split(":")
         await card(msg, f"{t}:{key}", kind)
     elif d.startswith("r:"):
-        await msg.answer("Собираю остатки по складам…")
+        await msg.answer("Собираю остатки по кластерам…")
         await restock_card(msg, d[2:])
 
 

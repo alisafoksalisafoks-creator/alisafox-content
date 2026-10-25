@@ -222,10 +222,10 @@ def excess_row(r, label, sub, hint=True):
 
 
 def supply_png(title, subtitle, rows, prefix, by="offer", tiles=None, per_sheet=12, max_sheets=4):
-    """Поставки: по складу (строки — артикулы) или по артикулу (строки — склады). Возвращает пути PNG."""
+    """Поставки: по кластеру (строки — артикулы) или по артикулу (строки — кластеры). Возвращает пути PNG."""
     load = [r for r in rows if r["status"] in ("urgent", "low") and r["need"] > 0]
     excess = [r for r in rows if r["status"] == "excess"] if by == "cluster" else []
-    first = "Склад" if by == "cluster" else "Артикул"
+    first = "Кластер" if by == "cluster" else "Артикул"
     cols = [(SUPPLY_COLS[0][0], first, "left")] + SUPPLY_COLS[1:]
 
     def fmt(r, fn):
@@ -248,7 +248,7 @@ def supply_png(title, subtitle, rows, prefix, by="offer", tiles=None, per_sheet=
         if last and excess:
             p.table("Перебор: больше 60 дней", cols, [fmt(r, excess_row) for r in excess])
         more = len(load) - per_sheet * max_sheets
-        _save(p, prefix, paths, ("Есть — на складе Ozon с учётом пути. Нужно — до 30 дней продаж. "
+        _save(p, prefix, paths, ("Есть — в кластере Ozon с учётом пути. Нужно — до 30 дней продаж. "
                                  "Везти — из своего остатка\n(МойСклад), сначала туда, где кончится раньше. "
                                  f"«{ORDER_HINT}» — своего мало,\nа товар в чистой прибыли за 2 месяца.")
               + (f"\nЕщё {more} строк не поместились — смотрите по артикулу." if last and more > 0 else ""))
@@ -259,7 +259,7 @@ def restock_png(title, rows, summary, prefix, limit=8):
     """Сценарий 3 из карточки категории или артикула: листы «грузить» и «перебор». Возвращает пути PNG."""
     load = [r for r in rows if r["status"] in ("urgent", "low") and r["need"] > 0][:limit]
     excess = sorted([r for r in rows if r["status"] == "excess"], key=lambda r: -r["excess"])[:limit]
-    cols = [(0.05, "Склад · товар", "left")] + SUPPLY_COLS[1:]
+    cols = [(0.05, "Кластер · товар", "left")] + SUPPLY_COLS[1:]
 
     def label(r):
         return f"● {short(r['cluster'], 20)}", f"{r['offer_id']} · {short(r['name'], 40)}"
@@ -281,7 +281,7 @@ def restock_png(title, rows, summary, prefix, limit=8):
     p.table("Оборачиваемость больше 60 дней", cols, [excess_row(r, *label(r)) for r in excess]
             or [([("● перебора нет", GOOD, True), None, None, None, None], "")])
     _save(p, prefix, paths, "Лишнее — сверх 60 дней продаж: вывезти или переместить.\n"
-          "Скорость по складу — средняя по данным Ozon.")
+          "Скорость по кластеру — средняя по данным Ozon.")
     return paths
 
 
@@ -376,7 +376,7 @@ def morning_png(m, prefix):
               (f"{x['turnover']:.0f} дн", EXCESS, True)], short(x["name"], 48)) for x in excess]
     p.table(f"Платное хранение: красных {len(m['excess'])}, скоро {len(m['soon'])} SKU", cols,
             rows or [([("● перебора нет", GOOD, True), None, None, None], "")])
-    done(p, "Полный список по складам — кнопка «Поставки» в меню. Свой склад — МойСклад.\n"
+    done(p, "Полный список по кластерам — кнопка «Поставки» в меню. Свой склад — МойСклад.\n"
          f"«{ORDER_HINT}» — своего нет, а товар в чистой прибыли с 1-го числа прошлого месяца.")
 
     # 4. Рейтинг и МойСклад
