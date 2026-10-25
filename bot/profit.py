@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from datetime import timedelta
 
-from bot.morning import AD_SERVICES, TAX
+from bot.morning import AD_SERVICES, OVERHEAD, TAX
 from bot.sources.moysklad import is_test
 
 PER_UNIT = {"logistics", "reverse_logistics", "courier_client_reinvoice", "delivery_to_handover_place_by_ozon",
@@ -120,6 +120,7 @@ def by_sku(db, oz, catalog, end, start=None, ads=None):
         cost = (catalog.get(offer) or {}).get("cost")
         if is_test(offer) or not cost or cost <= 0:
             continue
+        cost *= 1 + OVERHEAD
         units, rev = qty - rqty, total - rtotal
         ad = (ads or {}).get(sku, 0.0)
         pre = rev + unit_cost * units / units_all + rub_cost * rev / rev_all - units * cost - ad

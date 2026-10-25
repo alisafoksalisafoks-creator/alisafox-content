@@ -9,6 +9,7 @@ from bot.sources.performance import PerformanceClient
 
 log = logging.getLogger(__name__)
 TAX = 0.07  # УСН «доходы минус расходы»
+OVERHEAD = 0.03  # косвенные расходы — 3% сверху на себестоимость (владелец 2026-10-25)
 
 SERVICE_NAMES = {
     "logistics": "Логистика",
@@ -123,7 +124,7 @@ def build(db, oz, day: date):
                 continue
             c = (ms.get(r["offer_id"]) or {}).get("cost", 0)
             if c > 0:
-                total += c * r["n"]
+                total += c * (1 + OVERHEAD) * r["n"]
             else:
                 missing.append(r["offer_id"] or r["sku"])
         return total, missing
