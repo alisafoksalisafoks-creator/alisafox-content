@@ -36,9 +36,13 @@ def _snapshot(name):
     return [line.rstrip("\n").split("\t") for line in path.open(encoding="utf-8")]
 
 
+# кириллица, похожая на латиницу: в таблицах встречается «OZ657-Р10», «OZ650-НВ57TC»
+LOOKALIKE = str.maketrans("АВЕКМНОРСТХ", "ABEKMHOPCTX")
+
+
 def norm(article):
-    """Артикул для сравнения: без пробелов, длинное тире → дефис, верхний регистр."""
-    return re.sub(r"\s+", "", article or "").replace("–", "-").upper()
+    """Артикул для сравнения: без пробелов, длинное тире → дефис, верхний регистр, кириллица-двойник → латиница."""
+    return re.sub(r"\s+", "", article or "").replace("–", "-").upper().translate(LOOKALIKE)
 
 
 def root_of(article):
@@ -140,7 +144,7 @@ def parse_boxes(rows):
             continue
         sizes = []
         for name, v in zip(config.BOX_NAMES, r[1:6]):
-            n = _num(v)
+            n = _num(re.split(r"\s*-\s*", v or "")[0])   # «32-35» — берём меньшее: короб точно закроется
             if n and n > 0:
                 sizes.append((name, int(n)))
         out[norm(r[0])] = sizes

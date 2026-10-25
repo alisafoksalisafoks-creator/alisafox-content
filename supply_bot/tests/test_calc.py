@@ -169,3 +169,11 @@ def test_profit_per_unit_from_ozon_reports():
     # OZ2: 5000 − 79.2 − 496.5 − 4500 = −75.6 — минус, налога нет
     assert round(got["OZ2NEW"]["profit"], 1) == -75.6
     assert "OZ9" not in got                                # нет себестоимости — не считаем
+
+
+def test_box_quants_found_by_root_article():
+    boxes = {"OZ378VBLUE": [("A", 300)], "OZ299NEW2": [("A", 200)], "OZ657-P10": [("A", 80)], "OZ378": [("A", 9)]}
+    assert calc._sizes("OZ378VBLUENEW", "OZ378", boxes) == [("A", 300)]   # не строка OZ378
+    assert calc._sizes("OZ299NEW", "OZ299", boxes) == [("A", 200)]
+    from supply_bot.sources.sheets import norm
+    assert calc._sizes(norm("OZ657-Р10"), "", boxes) == [("A", 80)]       # кириллическая Р в таблице

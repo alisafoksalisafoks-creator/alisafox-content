@@ -465,12 +465,15 @@ def _ms_key(offer, unit, ms_by):
 
 
 def _sizes(offer, root, boxes):
-    for k in (norm(offer), norm(root)):
-        if boxes.get(k):
-            return boxes[k]
-    for k, v in boxes.items():
-        if v and root_of(k) == norm(root):
-            return v
+    """Кванты по артикулу, а если его строки нет — по корню: OZ378VBLUENEW берёт строку OZ378VBLUE или OZ378VBLUENEW2."""
+    if boxes.get(norm(offer)):
+        return boxes[norm(offer)]
+    for r in dict.fromkeys((root_of(offer), root_of(root))):  # сначала корень самого артикула
+        if boxes.get(r):
+            return boxes[r]
+        for k, v in boxes.items():
+            if v and root_of(k) == r:
+                return v
     return []
 
 
