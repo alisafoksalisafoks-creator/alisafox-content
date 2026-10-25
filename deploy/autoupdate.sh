@@ -4,7 +4,6 @@
 #   bash /opt/supply-bot/src/deploy/autoupdate.sh           — проверка и обновление (запускает таймер)
 # Если новый код не собирается (ошибка в Python), откатывает на прежнюю версию и бота не трогает.
 set -u
-export GIT_SSH_COMMAND="ssh -i /opt/supply-bot/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new"
 SELF=/opt/supply-bot/src/deploy/autoupdate.sh
 
 if [ "${1:-}" = "install" ]; then
@@ -35,14 +34,15 @@ fi
 update() {
   local dir=$1 venv=$2 req=$3 unit=$4 pkg=$5
   [ -d "$dir/.git" ] || return 0
-  local AS="runuser -u supplybot -- env GIT_SSH_COMMAND=$GIT_SSH_COMMAND"
+  # git — от supplybot: его ключ (/opt/supply-bot/.ssh) читает GitHub, и root не трогает чужой репозиторий
+  local AS="runuser -u supplybot --"
   $AS git -C "$dir" fetch -q origin || { echo "$unit: нет связи с GitHub"; return 0; }
   local old new
-  old=$(git -C "$dir" rev-parse HEAD)
-  new=$(git -C "$dir" rev-parse '@{u}')
+  old=$($AS git -C "$dir" rev-parse HEAD)
+  new=$($AS git -C "$dir" rev-parse '@{u}')
   [ "$old" = "$new" ] && return 0
   $AS git -C "$dir" merge -q --ff-only '@{u}' || { echo "$unit: не удалось обновить"; return 0; }
-  if ! git -C "$dir" diff --quiet "$old" "$new" -- "$req"; then
+  if ! $AS git -C "$dir" diff --quiet "$old" "$new" -- "$req"; then
     runuser -u supplybot -- "$venv/bin/pip" install -q -r "$dir/$req"
   fi
   if ! runuser -u supplybot -- "$venv/bin/python" -m compileall -q "$dir/$pkg" >/dev/null; then
