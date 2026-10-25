@@ -2,7 +2,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from . import config
+from . import config, profit
 from .calc import Snapshot
 from .sources import sheets
 from .sources.moysklad import MoySkladClient
@@ -71,6 +71,11 @@ def collect(log=print, today=None):
         unshipped = []
     log("«Мой склад»: остатки")
     ms_rows = ms.stock(config.MS_STORE)
+    try:
+        profits = profit.collect(oz, ms, today - timedelta(days=1), log)
+    except Exception as e:  # noqa: BLE001 — без прибыли распределение считаем, «Заказать» предупредит
+        log(f"Не удалось посчитать прибыль: {e}")
+        profits = {}
     log("Таблица AlisaFox: статусы, рейтинг, выкуп, платное хранение")
     unit = sheets.load_unit()
     paid = sheets.load_paid(today)
@@ -78,4 +83,4 @@ def collect(log=print, today=None):
     boxes = sheets.load_boxes()
     return Snapshot(today=today, postings=post, wh_stocks=wh_stocks, wh_cluster=wh_cluster,
                     product_stocks=prod, ms=ms_rows, unshipped=unshipped, unit=unit, paid=paid,
-                    boxes=boxes, season=load_season(), taken_at=datetime.now(MSK).strftime("%d.%m.%Y %H:%M"))
+                    boxes=boxes, season=load_season(), profit=profits, taken_at=datetime.now(MSK).strftime("%d.%m.%Y %H:%M"))

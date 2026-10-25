@@ -44,3 +44,29 @@ class MoySkladClient:
             if len(page) < 1000:
                 return rows
             offset += 1000
+
+    def _all(self, path):
+        offset = 0
+        while True:
+            page = self.get(path, limit=1000, offset=offset)["rows"]
+            yield from page
+            if len(page) < 1000:
+                return
+            offset += 1000
+
+    def costs(self):
+        """{корневой артикул: себестоимость 1 шт, ₽}. Средняя себестоимость точнее закупочной цены;
+        нет средней (товара нет на складе) — закупочная цена из карточки."""
+        from ..profit import root
+        out = {}
+        for r in self._all("entity/assortment"):
+            key = root(r.get("article") or r.get("code"))
+            buy = (r.get("buyPrice") or {}).get("value", 0) / 100
+            if key and buy > 0 and not out.get(key):
+                out[key] = buy
+        for r in self._all("report/stock/all"):
+            key = root(r.get("article") or r.get("code"))
+            avg = (r.get("price") or 0) / 100
+            if key and avg > 0:
+                out[key] = avg
+        return out

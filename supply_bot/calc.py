@@ -27,6 +27,7 @@ class Snapshot:
     paid: dict                # {артикул: [{qty, date}]}
     boxes: dict               # {артикул: [(короб, шт)]}
     season: dict = field(default_factory=dict)   # {категория: {месяц 1..12: коэф}}
+    profit: dict = field(default_factory=dict)   # {offer: {per_unit, profit, units, revenue}} — profit.py
     taken_at: str = ""
 
 
@@ -361,6 +362,7 @@ def build(snap, overrides=None):
     shipped = defaultdict(int)
     for (offer, _d), ln in lines.items():
         shipped[offer] += ln.qty
+    profits = {norm(k): v for k, v in (getattr(snap, "profit", None) or {}).items()}
     cl_of_offer = defaultdict(set)
     for (o, cl) in set(s14c) | set(stock_c):
         if cl:
@@ -375,15 +377,19 @@ def build(snap, overrides=None):
             need += max(0, round(sp * (config.lead_days(cl) + config.TARGET_DAYS) - st["available"] - st["transit"]))
             have += st["available"] + st["transit"]
             speed += sp
-        short = need - shipped.get(offer, 0)
+        key = _ms_key(offer, snap.unit, ms_by)
+        free = ms_by[key]["free"] if key else 0
+        # заказываем только то, чего нет у нас вообще: остаток, который не влез в целые короба, — не заказ
+        short = need - max(shipped.get(offer, 0), free)
         if short <= 0 or not speed:
             continue
-        key = _ms_key(offer, snap.unit, ms_by)
-        item = {"offer": e["name"], "root": e["u"]["root"], "profit": e["u"].get("profit"),
+        pr = profits.get(offer) or {}
+        item = {"offer": e["name"], "root": e["u"]["root"], "profit": pr.get("per_unit"),
                 "speed": speed, "ozon": have, "days": have / speed, "need": need,
-                "free": ms_by[key]["free"] if key else 0, "ship": shipped.get(offer, 0), "order": short}
+                "free": free, "ship": shipped.get(offer, 0), "order": short}
         if item["profit"] is None or item["profit"] <= 0:
-            item["why"] = "нет данных о прибыли" if item["profit"] is None else "минусовой артикул"
+            item["why"] = "прибыль не посчитать: нет продаж или себестоимости" if item["profit"] is None \
+                else "минусовой артикул"
             plan.order_skipped.append(item)
         else:
             plan.order.append(item)

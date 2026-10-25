@@ -145,12 +145,27 @@ def test_moscow_is_one_cluster():
 
 
 def test_order_only_profitable_items_missing_on_our_stock():
-    units = {"OZ1": {**unit("OZ1"), "profit": 50}, "OZ2": {**unit("OZ2"), "profit": -10},
-             "OZ3": {**unit("OZ3"), "profit": 30}}
-    post = sales("OZ1", MSK1, 5) + sales("OZ2", MSK1, 5) + sales("OZ3", MSK1, 5)
-    plan = calc.build(snap(post, ms={"OZ1": 0, "OZ2": 0, "OZ3": 100}, units=units))
+    units = {o: unit(o) for o in ("OZ1", "OZ2", "OZ3", "OZ4")}
+    post = sales("OZ1", MSK1, 5) + sales("OZ2", MSK1, 5) + sales("OZ3", MSK1, 5) + sales("OZ4", MSK1, 5)
+    s = snap(post, ms={"OZ1": 0, "OZ2": 0, "OZ3": 100, "OZ4": 0}, units=units)
+    s.profit = {"OZ1": {"per_unit": 50}, "OZ2": {"per_unit": -10}, "OZ3": {"per_unit": 30}}
+    plan = calc.build(s)
     got = {x["offer"]: x for x in plan.order}
     assert set(got) == {"OZ1", "OZ3"}                     # минусовой OZ2 не заказываем
     assert got["OZ1"]["order"] == 5 * 37 and got["OZ3"]["order"] == 5 * 37 - got["OZ3"]["ship"]
     assert all(ln.offer != "OZ1" for ln in plan.lines)  # в распределении только то, что есть у нас
-    assert plan.order_skipped[0]["why"] == "минусовой артикул"
+    why = {x["offer"]: x["why"] for x in plan.order_skipped}
+    assert why["OZ2"] == "минусовой артикул" and why["OZ4"].startswith("прибыль не посчитать")
+
+
+def test_profit_per_unit_from_ozon_reports():
+    from supply_bot import profit
+    # OZ1: 10 шт по 1000 ₽ после комиссии, 1 возврат; OZ2NEW (корень OZ2): 10 шт по 500 ₽
+    real = {"OZ1": [10, 10000, 1, 1000], "OZ2NEW": [10, 5000, 0, 0], "OZ9": [5, 100, 0, 0]}
+    got = profit.by_offer(real, {"OZ1": 600, "OZ2": 450}, unit_cost=-190, rub_cost=-1400)
+    # услуги делятся на все проданные 24 шт и 14 100 ₽ выручки
+    # OZ1: 9000 − 190×9/24 − 1400×9000/14100 − 9×600 = 2635.1; налог 7% → 2450.7
+    assert round(got["OZ1"]["profit"], 1) == 2450.7 and round(got["OZ1"]["per_unit"], 1) == 272.3
+    # OZ2: 5000 − 79.2 − 496.5 − 4500 = −75.6 — минус, налога нет
+    assert round(got["OZ2NEW"]["profit"], 1) == -75.6
+    assert "OZ9" not in got                                # нет себестоимости — не считаем
