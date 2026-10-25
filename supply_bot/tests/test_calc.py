@@ -5,9 +5,9 @@ from supply_bot import calc
 from supply_bot.sources.sheets import parse_paid
 
 TODAY = date(2026, 10, 24)   # суббота → отгрузка в понедельник 26.10
-MSK1, MSK2, SPB, KZN = "ВАТУТИНКИ_РФЦ", "НОГИНСК_РФЦ", "СПБ_ШУШАРЫ_РФЦ", "КАЗАНЬ_РФЦ_НОВЫЙ"
+MSK1, MSK2, SPB, SPB2, KZN = "ВАТУТИНКИ_РФЦ", "НОГИНСК_РФЦ", "СПБ_ШУШАРЫ_РФЦ", "СПБ_БУГРЫ_РФЦ", "КАЗАНЬ_РФЦ_НОВЫЙ"
 CLUSTERS = {MSK1: "Москва, МО и Дальние регионы", MSK2: "Москва, МО и Дальние регионы",
-            SPB: "Санкт-Петербург и СЗО", KZN: "Казань", "АЛМАТЫ_2_РФЦ": "Алматы"}
+            SPB: "Санкт-Петербург и СЗО", SPB2: "Санкт-Петербург и СЗО", KZN: "Казань", "АЛМАТЫ_2_РФЦ": "Алматы"}
 
 
 def sales(offer, wh, per_day, days=14):
@@ -49,8 +49,8 @@ def test_need_per_warehouse_rounded_to_boxes_and_limited_by_our_stock():
     by = {ln.warehouse: ln for ln in plan.lines}
     # Москва: 10/дн × (7 + 30) − 50 = 320 → полные короба по 50
     assert by[MSK1].need == 320 and by[MSK1].qty % 50 == 0 and by[MSK1].box_count == by[MSK1].qty // 50
-    # Казань: 2/дн × (9 + 30) − 10 = 68 → 50 или 100, только целые короба
-    assert by[KZN].qty in (50, 100)
+    # Казань — направление «кластер»: 2/дн × (9 + 30) − 10 = 68 → 50 или 100, только целые короба
+    assert by["Казань"].qty in (50, 100) and by["Казань"].ship_to == KZN
 
 
 def test_box_never_split_between_directions():
@@ -125,3 +125,20 @@ def test_foreign_warehouses_excluded():
     plan = calc.build(s)
     assert all(ln.warehouse not in ("МИНСК_МПСЦ", "АЛМАТЫ_2_РФЦ") for ln in plan.lines)
     assert "Алматы" not in {x["cluster"] for x in plan.empty_whole + plan.empty_clusters}
+
+
+def test_cluster_is_one_direction_outside_moscow():
+    # два склада Питера — одна строка «кластер», спрос и остатки складываются
+    s = snap(sales("OZ1", SPB, 6) + sales("OZ1", SPB2, 4), stocks=[("OZ1", SPB, 30, 0), ("OZ1", SPB2, 10, 0)],
+             ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")})
+    plan = calc.build(s)
+    spb = [ln for ln in plan.lines if ln.cluster == "Санкт-Петербург и СЗО"]
+    assert len(spb) == 1 and spb[0].warehouse == "Санкт-Петербург и СЗО" and spb[0].ship_to == SPB
+    assert spb[0].need == 10 * (3 + 30) - 40
+
+
+def test_moscow_need_split_between_main_warehouses_by_our_sales():
+    s = snap(sales("OZ1", MSK1, 6) + sales("OZ1", MSK2, 2), ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")})
+    plan = calc.build(s)
+    by = {ln.warehouse: ln for ln in plan.lines}
+    assert by[MSK1].need == 6 * 37 and by[MSK2].need == 2 * 37

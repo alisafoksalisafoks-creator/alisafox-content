@@ -33,27 +33,27 @@ def build(plan, path, snap_time=""):
     wb.remove(wb.active)
 
     ws = _sheet(wb, "Лист распределения",
-                ["Направление (склад)", "Кластер", "Артикул", "Кол-во, шт", "Короб", "Шт в коробе", "Коробов",
+                ["Направление", "Кластер", "Склад приёмки", "Артикул", "Кол-во, шт", "Короб", "Шт в коробе", "Коробов",
                  "Дата отгрузки", "Приоритет", "Пометки"],
-                [], [30, 26, 28, 11, 14, 11, 9, 13, 11, 50])
+                [], [30, 26, 28, 28, 11, 14, 11, 9, 13, 11, 50])
     for wh, lines in plan.by_warehouse().items():
         for ln in sorted(lines, key=lambda x: (-["обычно", "наверх", "срочно"].index(x.priority), -x.qty)):
             if ln.boxes:
                 for name, s, k in ln.boxes:
-                    ws.append([wh, ln.cluster, ln.offer, s * k, name, s, k, plan.ship_date, ln.priority, "; ".join(ln.flags)])
+                    ws.append([wh, ln.cluster, ln.ship_to, ln.offer, s * k, name, s, k, plan.ship_date, ln.priority, "; ".join(ln.flags)])
             else:
-                ws.append([wh, ln.cluster, ln.offer, ln.qty, "нет кванта", None, None, plan.ship_date, ln.priority,
+                ws.append([wh, ln.cluster, ln.ship_to, ln.offer, ln.qty, "нет кванта", None, None, plan.ship_date, ln.priority,
                            "; ".join(ln.flags)])
-        row = [f"Итого {wh}", "", f"{len(lines)} арт.", sum(x.qty for x in lines), "", "",
+        row = [f"Итого {wh}", "", "", f"{len(lines)} арт.", sum(x.qty for x in lines), "", "",
                sum(x.box_count for x in lines), "", "", ""]
         ws.append(row)
         for c in ws[ws.max_row]:
             c.font, c.fill = BOLD, TOTAL
-    for c in ws["H"][1:]:
+    for c in ws["I"][1:]:
         c.number_format = "DD.MM.YYYY"
 
-    _sheet(wb, "Потребность по складам",
-           ["Склад", "Кластер", "Артикул", "Отгрузки 14 дн", "Отгрузки 30 дн", "Коэф. сезона", "Скорость, шт/дн",
+    _sheet(wb, "Потребность по направлениям",
+           ["Направление", "Кластер", "Артикул", "Отгрузки 14 дн", "Отгрузки 30 дн", "Коэф. сезона", "Скорость, шт/дн",
             "Доступно", "В пути", "Дней запаса", "Срок L, дн", "Потребность", "К отправке", "Коробов",
             "Короба", "Приоритет", "Пометки"],
            [[ln.warehouse, ln.cluster, ln.offer, ln.sales14, ln.sales30, ln.season, round(ln.speed, 2),
@@ -67,7 +67,7 @@ def build(plan, path, snap_time=""):
            + [[x["cluster"], x["offer"], x["sales14"], x["warehouse"], x["ff_free"]] for x in plan.empty_clusters],
            [26, 28, 14, 30, 12])
 
-    _sheet(wb, "Не попало в план", ["Артикул", "Склад", "Потребность", "Скорость, шт/дн", "Мин. короб", "Почему"],
+    _sheet(wb, "Не попало в план", ["Артикул", "Направление", "Потребность", "Скорость, шт/дн", "Мин. короб", "Почему"],
            [[x["offer"], x["warehouse"], x["need"], round(x["speed"], 2), x["box"], x["why"]]
             for x in sorted(plan.small, key=lambda x: -x["need"])], [28, 28, 12, 12, 10, 26])
 
@@ -98,11 +98,12 @@ def build(plan, path, snap_time=""):
     _sheet(wb, "Параметры", ["Параметр", "Значение"], [
         ["Снимок данных", snap_time],
         ["Дата отгрузки", plan.ship_date.strftime("%d.%m.%Y")],
-        ["Спрос", f"отгрузки FBO со склада за {config.SALES_DAYS} дн без отмен ÷ {config.SALES_DAYS} × коэф. сезона"],
+        ["Спрос", f"отгрузки FBO из кластера (в Москве — со склада) за {config.SALES_DAYS} дн без отмен ÷ {config.SALES_DAYS} × коэф. сезона"],
         ["Потребность", f"спрос × (L + {config.TARGET_DAYS}) − (доступно + в пути)"],
         ["Наш склад", f"«Мой склад», {config.MS_STORE}: остаток − резерв − заявки, которые ещё не уехали"],
         ["Короба", "моно-короб под одно направление; большими коробами, остаток — коробом поменьше"],
-        ["Обязательные склады", "; ".join(f"{cl}: {', '.join(w)}" for cl, w in plan.mandatory.items())],
+        ["Направления", "кластер целиком; склад приёмки — подсказка (наш основной склад кластера)"],
+        ["Москва — основные склады", "; ".join(f"{cl}: {', '.join(w)}" for cl, w in plan.mandatory.items())],
         ["Статусы", "таблица AlisaFox, лист «Юнит экономика Алиса», столбец «Статус ЗАЯВОК» (только чтение)"],
         ["Предупреждения", f"платное ≤ {config.PAID_SOON_DAYS} дн, выкуп < {config.BUYOUT_MIN:.0%}, "
                            f"рейтинг < {config.RATING_MIN}, сезон < {config.SEASON_LOW}"],

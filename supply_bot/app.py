@@ -132,13 +132,13 @@ def start_kb(chat_id):
 FBO = kb([
     [("📊 Распределение по магазину", "plan")],
     [("📥 Сформировать отчёт Excel", "file")],
-    [("🔎 По артикулу", "ask_offer"), ("🏬 По складу", "whs:0")],
+    [("🔎 По артикулу", "ask_offer"), ("🏬 По направлению", "whs:0")],
     [("🗺 Пустые кластеры", "empty"), ("⛔ Решить / стоп", "decide")],
     [("💰 Скоро платно", "paid"), ("🧾 Сверка с «Моим складом»", "reconcile")],
     [("🔄 Обновить данные", "refresh"), ("⬅️ Назад", "start")],
 ])
 SCREEN = kb([
-    [("🏬 Показать по складам", "all_wh")],
+    [("🏬 Показать по направлениям", "all_wh")],
     [("✅ Всё верно, прислать файлом", "file")],
     [("✏️ Исправить кол-во", "fix"), ("🔁 Пересчитать", "refresh")],
     [("⬅️ Меню FBO", "fbo")],
@@ -246,10 +246,10 @@ async def on_button(c: CallbackQuery):
         S.wait[m.chat.id] = {"step": "offer"}
         await m.answer("Введите артикул Ozon, например <code>OZ299NEW</code>.")
     elif d.startswith("whs:"):
-        await m.answer("Выберите склад:", reply_markup=wh_keyboard(plan, int(d[4:]), "wh"))
+        await m.answer("Выберите направление:", reply_markup=wh_keyboard(plan, int(d[4:]), "wh"))
     elif d.startswith("wh:"):
         await send(m, render.warehouse(plan, _wh_by_index(plan, int(d[3:]))),
-                   kb([[("🏬 Другой склад", "whs:0"), ("⬅️ Меню FBO", "fbo")]]))
+                   kb([[("🏬 Другое направление", "whs:0"), ("⬅️ Меню FBO", "fbo")]]))
     elif d == "empty":
         await send(m, render.empty_clusters(plan), FBO)
     elif d == "decide":
@@ -259,20 +259,20 @@ async def on_button(c: CallbackQuery):
     elif d == "reconcile":
         await send(m, render.reconcile(plan), FBO)
     elif d == "fix":
-        rows = [[("➕ Склад не из списка", "fixwh:other")]]
+        rows = [[("➕ Направление не из списка", "fixwh:other")]]
         if S.overrides:
             rows.append([("🧹 Сбросить все правки", "fixreset")])
-        await m.answer("Исправить количество. Выберите склад:",
+        await m.answer("Исправить количество. Выберите направление:",
                        reply_markup=_merge(wh_keyboard(plan, 0, "fixwh"), rows))
     elif d.startswith("fixwhs:"):
-        await m.answer("Выберите склад:", reply_markup=wh_keyboard(plan, int(d[7:]), "fixwh"))
+        await m.answer("Выберите направление:", reply_markup=wh_keyboard(plan, int(d[7:]), "fixwh"))
     elif d == "fixwh:other":
         S.wait[m.chat.id] = {"step": "fix_wh_name"}
-        await m.answer("Введите название склада, как в Ozon, например <code>КАЗАНЬ_РФЦ_НОВЫЙ</code>.")
+        await m.answer("Введите название кластера, как в Ozon, например <code>Казань</code>. Для Москвы — склад, например <code>НОГИНСК_РФЦ</code>.")
     elif d.startswith("fixwh:"):
         wh = _wh_by_index(plan, int(d[6:]))
         S.wait[m.chat.id] = {"step": "fix_offer", "wh": wh}
-        await m.answer(f"Склад <b>{wh}</b>. Введите артикул.")
+        await m.answer(f"Направление <b>{wh}</b>. Введите артикул.")
     elif d == "fixreset":
         S.overrides = {}
         S.save_overrides()
@@ -303,12 +303,12 @@ async def on_text(m: Message):
         return await send(m, render.offer(plan, text, S.snap.unit),
                           kb([[("🔎 Ещё артикул", "ask_offer"), ("⬅️ Меню FBO", "fbo")]]))
     if w["step"] == "fix_wh_name":
-        known = {norm(x): x for x in S.snap.wh_cluster}
-        wh = known.get(norm(text))
+        known = {norm(x): x for x in calc.directions_of(plan, S.snap.wh_cluster)}
+        wh = known.get(norm(text)) or next((v for k, v in known.items() if norm(text) in k), None)
         if not wh:
-            return await m.answer("Такого склада Ozon нет в списке кластеров. Проверьте название.")
+            return await m.answer("Такого направления нет: нужен кластер Ozon, а для Москвы — один из 5 основных складов.")
         S.wait[m.chat.id] = {"step": "fix_offer", "wh": wh}
-        return await m.answer(f"Склад <b>{wh}</b>. Введите артикул.")
+        return await m.answer(f"Направление <b>{wh}</b>. Введите артикул.")
     if w["step"] == "fix_offer":
         line = next((x for x in plan.lines if x.warehouse == w["wh"] and norm(x.offer) == norm(text)), None)
         now = f"сейчас в плане {line.qty} шт ({render._boxes(line)})" if line else "сейчас в плане нет"
