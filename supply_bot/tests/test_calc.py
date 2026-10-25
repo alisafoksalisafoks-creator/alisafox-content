@@ -98,7 +98,7 @@ def test_mandatory_moscow_warehouse_gets_start_line_and_empty_cluster_signal():
     assert set(plan.mandatory["Москва, МО и Дальние регионы"]) == {MSK1, MSK2}
     start = [ln for ln in plan.lines if ln.offer == "OZ1" and ln.warehouse == MSK2]
     assert start and start[0].priority == "срочно"
-    assert {x["cluster"] for x in plan.empty_whole} == {"Алматы", "Санкт-Петербург и СЗО"}
+    assert {x["cluster"] for x in plan.empty_whole} == {"Санкт-Петербург и СЗО"}
 
 
 def test_manual_override_rounds_to_nearest_full_box():
@@ -115,3 +115,13 @@ def test_paid_sheet_takes_only_latest_block():
     got = parse_paid(rows, TODAY)
     assert got["OZ1"] == [{"qty": 114, "date": date(2026, 11, 1)}]
     assert got["OZ2"][0]["date"] == TODAY
+
+
+def test_foreign_warehouses_excluded():
+    s = snap(sales("OZ1", "МИНСК_МПСЦ", 10) + sales("OZ1", MSK1, 1),
+             stocks=[("OZ1", "АЛМАТЫ_2_РФЦ", 0, 0)], ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")})
+    s.wh_stocks.append({"offer_id": "OZ1", "warehouse": "МИНСК_МПСЦ", "cluster": "Беларусь",
+                        "available": 0, "transit": 0})
+    plan = calc.build(s)
+    assert all(ln.warehouse not in ("МИНСК_МПСЦ", "АЛМАТЫ_2_РФЦ") for ln in plan.lines)
+    assert "Алматы" not in {x["cluster"] for x in plan.empty_whole + plan.empty_clusters}

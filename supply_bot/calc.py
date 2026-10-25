@@ -141,12 +141,17 @@ def build(snap, overrides=None):
     plan = Plan(today=today, ship_date=next_ship_date(today))
     month = today.month
 
+    foreign_wh = {w for w, cl in snap.wh_cluster.items() if config.foreign(cl)} | \
+        {r["warehouse"] for r in snap.wh_stocks if config.foreign(r.get("cluster"))}
+
     # --- спрос по складам ---
     d14, d30 = str(today - timedelta(days=config.SALES_DAYS)), str(today - timedelta(days=config.REF_DAYS))
     s14, s30 = defaultdict(int), defaultdict(int)
     wh_sales30 = defaultdict(int)
     for day, offer, _sku, wh, qty in snap.postings:
         if day >= str(today) or not wh:
+            continue
+        if wh in foreign_wh:
             continue
         key = (norm(offer), wh)
         if day >= d30:
@@ -156,8 +161,10 @@ def build(snap, overrides=None):
             s14[key] += qty
 
     stock = {}
-    cluster_of = dict(snap.wh_cluster)
+    cluster_of = {w: cl for w, cl in snap.wh_cluster.items() if not config.foreign(cl)}
     for r in snap.wh_stocks:
+        if config.foreign(r.get("cluster")):
+            continue
         key = (norm(r["offer_id"]), r["warehouse"])
         rec = stock.setdefault(key, {"available": 0, "transit": 0})
         rec["available"] += r["available"]
