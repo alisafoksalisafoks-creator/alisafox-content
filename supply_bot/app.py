@@ -8,13 +8,14 @@ import json
 import logging
 import os
 import tempfile
+from html import escape
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, ErrorEvent, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from . import calc, config, excel, render
 from .cli import snapshot
@@ -119,6 +120,18 @@ async def send(msg, texts, markup=None):
 def _guard(chat_id):
     """Пустой SUPPLY_BOT_CHATS — доступа нет ни у кого, бот только подскажет chat id."""
     return chat_id in allowed_chats()
+
+
+@dp.errors()
+async def on_error(event: ErrorEvent):
+    """Сбой источника (Ozon, «Мой склад», таблицы) — говорим владельцу, а не молчим."""
+    log.exception("ошибка обработки", exc_info=event.exception)
+    upd = event.update
+    msg = upd.message or (upd.callback_query.message if upd.callback_query else None)
+    if msg:
+        await msg.answer(f"⚠️ Не получилось: {escape(str(event.exception))[:300]}\n"
+                         "Попробуйте ещё раз через пару минут. Если повторяется — пришлите это сообщение в проект.",
+                         reply_markup=START)
 
 
 @dp.message(CommandStart())
