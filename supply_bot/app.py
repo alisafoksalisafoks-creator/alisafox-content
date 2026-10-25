@@ -131,6 +131,7 @@ def start_kb(chat_id):
     return START_ADMIN if chat_id in admins() else START
 FBO = kb([
     [("📊 Распределение по магазину", "plan")],
+    [("📥 Сформировать отчёт Excel", "file")],
     [("🔎 По артикулу", "ask_offer"), ("🏬 По складу", "whs:0")],
     [("🗺 Пустые кластеры", "empty"), ("⛔ Решить / стоп", "decide")],
     [("💰 Скоро платно", "paid"), ("🧾 Сверка с «Моим складом»", "reconcile")],
@@ -239,6 +240,7 @@ async def on_button(c: CallbackQuery):
     elif d == "all_wh":
         await send(m, render.all_warehouses(plan), SCREEN)
     elif d == "file":
+        await m.answer("Формирую отчёт Excel…")
         await send_file(m, plan)
     elif d == "ask_offer":
         S.wait[m.chat.id] = {"step": "offer"}
