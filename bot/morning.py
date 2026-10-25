@@ -3,7 +3,7 @@ import logging
 import time
 from datetime import date, timedelta
 
-from bot import store
+from bot import restock, signals, store
 from bot.sources import moysklad
 from bot.sources.performance import PerformanceClient
 
@@ -138,6 +138,17 @@ def build(db, oz, day: date):
         log.exception("прибыль по артикулам не посчиталась")
         profits = {}
 
+    try:  # сигналы по кластерам: что пора отгрузить
+        skus = [r[0] for r in db.execute("select sku from daily where day >= ? group by sku having sum(ordered_units) > 0",
+                                         (str(day - timedelta(days=29)),))]
+        _, sig = signals.build(db, restock.cluster_stocks(oz, skus), day, turnover=turn, catalog=ms)
+        for k, v in sig.items():
+            v["profit"] = (profits.get(k) or {}).get("profit")
+        ship, resort = signals.to_ship(sig), signals.resort(sig)
+    except Exception:
+        log.exception("сигналы по остаткам не посчитались")
+        ship, resort = None, []
+
     cats = db.execute(
         "select s.type_name, sum(case when d.day = ? then d.revenue end) cur, "
         "sum(case when d.day = ? then d.revenue end) wk, sum(case when d.day = ? then d.ordered_units end) units "
@@ -151,5 +162,5 @@ def build(db, oz, day: date):
         "spend": spend, "spend_prev": spend_prev,
         "drr": spend / t["revenue"] * 100 if t["revenue"] else 0,
         "drr_prev": spend_prev / t_prev["revenue"] * 100 if t_prev["revenue"] else 0,
-        "ms": ms, "profits": profits, "ending": ending, "excess": excess, "soon": soon, "rating_drops": rating_drops, "cats": cats,
+        "ms": ms, "profits": profits, "ending": ending, "ship": ship, "resort": resort, "excess": excess, "soon": soon, "rating_drops": rating_drops, "cats": cats,
     }

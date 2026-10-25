@@ -22,7 +22,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
                            Message)
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from bot import cards, dashboard, morning, profit, restock, store
+from bot import cards, dashboard, morning, profit, restock, signals, store
 from bot.category_report import MSK
 from bot.sources.moysklad import Catalog
 from bot.sources.ozon import OzonClient
@@ -35,9 +35,9 @@ MORNING_HOUR = 9  # утренняя сводка в 9:00 МСК
 dp = Dispatcher()
 db = store.connect()
 oz = OzonClient()
-waiting: dict[int, str] = {}  # кто прислал артикул: "card" — карточка, "supply" — поставки
-_supply = {"at": 0.0, "rows": None}
-SUPPLY_TTL = 3600  # план поставок пересчитывается не чаще раза в час
+waiting: dict[int, str] = {}  # кто прислал артикул: "card" — карточка, "signals" — сигналы по остаткам
+_signals = {"at": 0.0, "skus": None}
+SIGNALS_TTL = 3600  # сигналы по остаткам пересчитываются не чаще раза в час
 
 
 def yesterday():
@@ -55,9 +55,9 @@ def kb(rows):
 
 MENU = kb([[("📊 Сводка за вчера", "morning")],
            [("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
-           [("🚚 Поставки", "sup")]])
-SUPPLY_MENU = kb([[("🗺 По кластеру", "sup:w")], [("🔎 По артикулу", "sup:a")],
-                  [("📋 Что отгрузить", "sup:l")], [("⬅️ Меню", "menu")]])
+           [("🚦 Сигналы по остаткам", "sig")]])
+SIGNALS_MENU = kb([[("⏰ Пора отгрузить", "sig:s")], [("🔀 Пересорт", "sig:x")],
+                   [("💸 Платное хранение", "sig:p")], [("🔎 По артикулу", "sig:a")], [("⬅️ Меню", "menu")]])
 
 
 def period_kb(target, kind):
@@ -65,7 +65,7 @@ def period_kb(target, kind):
     mark = {k: ("• " if k == kind else "") for k in cards.PERIODS}
     return kb([[(f"{mark['day']}Вчера", f"p:{target}:day"), (f"{mark['week']}Неделя", f"p:{target}:week"),
                 (f"{mark['month']}Месяц", f"p:{target}:month")],
-               [("🚚 Подгрузка", f"r:{target}"), ("⬅️ Меню", "menu")]])
+               [("🚦 Сигналы", f"r:{target}"), ("⬅️ Меню", "menu")]])
 
 
 db.execute("create table if not exists users (id integer primary key, name text, added text)")
@@ -163,77 +163,80 @@ def top_rows(type_id, period, limit=8):
     return rows
 
 
-def build_supply():
-    """План по всем SKU с продажами за 30 дней: остатки по складам Ozon + свой остаток, поделённый по срочности."""
+def build_signals():
+    """Сигналы по всем SKU с продажами за 30 дней: остатки по кластерам Ozon, сезонная скорость, свой склад."""
     skus = [r[0] for r in db.execute("select sku from daily where day >= ? group by sku having sum(ordered_units) > 0",
                                      (str(data_day() - timedelta(days=29)),))]
     catalog = Catalog()
-    rows = restock.allocate(restock.plan(restock.cluster_stocks(oz, skus)), catalog)
+    _, by = signals.build(db, restock.cluster_stocks(oz, skus), data_day(), turnover=morning.turnover(oz),
+                          catalog=catalog)
     try:
         profits = profit.by_sku(db, oz, catalog, data_day())
     except Exception:
         log.exception("прибыль по артикулам не посчиталась")
         profits = {}
-    for r in rows:
-        r["profit"] = (profits.get(r["sku"]) or {}).get("profit")
-    return rows
+    for k, v in by.items():
+        v["profit"] = (profits.get(k) or {}).get("profit")
+    return by
 
 
-async def supply_rows(msg: Message):
-    if _supply["rows"] is None or time.time() - _supply["at"] > SUPPLY_TTL:
-        await msg.answer("Считаю остатки по всем кластерам и свой склад, 1–2 минуты…")
-        _supply["rows"] = await asyncio.to_thread(build_supply)
-        _supply["at"] = time.time()
-    return _supply["rows"]
+async def signal_skus(msg: Message):
+    if _signals["skus"] is None or time.time() - _signals["at"] > SIGNALS_TTL:
+        await msg.answer("Считаю остатки по всем кластерам с учётом сезона, 1–2 минуты…")
+        _signals["skus"] = await asyncio.to_thread(build_signals)
+        _signals["at"] = time.time()
+    return _signals["skus"]
 
 
-async def restock_card(msg: Message, target):
-    rows = await supply_rows(msg)
-    if target.startswith("c:"):
-        tid = target[2:]
-        skus = {r[0] for r in db.execute("select sku from sku where type_id = ?", (tid,))}
-        title = db.execute("select type_name from sku where type_id = ? limit 1", (tid,)).fetchone()[0]
-    else:
-        s = store.find_sku(db, target[2:])
-        skus, title = {s["sku"]}, s["offer_id"] or s["sku"]
-    rows = [r for r in rows if r["sku"] in skus]
-    summ = restock.summary(rows)
-    await send_png(msg, lambda p: dashboard.restock_png(title, rows, summ, p),
-                   f"Подгрузка: {title}", kb([[("🚚 Поставки", "sup"), ("⬅️ Меню", "menu")]]))
+def sig_today():
+    """Сегодня для прогноза: день после последних данных."""
+    return data_day() + timedelta(days=1)
 
 
-async def supply_cluster(msg: Message, i):
-    rows = await supply_rows(msg)
-    c = restock.by_cluster(rows)[i]
-    part = sorted((r for r in rows if r["cluster"] == c["cluster"]), key=lambda r: (r["days"] or 0, -r["need"]))
-    await send_png(msg, lambda p: dashboard.supply_png(
-        f"Кластер {c['cluster']}", f"Что везти · {c['skus']} SKU · нужно {c['need']} шт, везти {c['ship']} шт",
-        part, p, by="offer"), f"Поставка в кластер {c['cluster']}",
-        kb([[("🗺 Другой кластер", "sup:w"), ("⬅️ Поставки", "sup")]]))
+SIGNAL_LISTS = {
+    "s": ("ship", signals.to_ship, "Пора отгрузить", lambda s: f"{s['offer_id'][:20]} · до {dashboard.ship_date(s['ship_by'], sig_today())}"),
+    "x": ("resort", signals.resort, "Пересорт",
+          lambda s: f"{s['offer_id'][:20]} · лишнее {len(s['excess'])} кл. / кончается {len(s['ship'])}"),
+    "p": ("paid", signals.paid, "Платное хранение",
+          lambda s: f"{s['offer_id'][:20]} · {dashboard.GRADE[s['grade']][0]}"),
+}
 
 
-async def supply_sku(msg: Message, sku):
-    rows = await supply_rows(msg)
-    part = [r for r in rows if r["sku"] == sku]
-    if not part:
-        s = store.find_sku(db, sku)
-        part = restock.allocate(restock.plan(await asyncio.to_thread(restock.cluster_stocks, oz, [sku])),
-                                await asyncio.to_thread(Catalog))
-    if not part:
-        return await msg.answer("По этому артикулу нет остатков и продаж в кластерах Ozon.", reply_markup=SUPPLY_MENU)
-    part.sort(key=lambda r: (r["days"] or 0, -r["need"]))
-    offer, own = part[0]["offer_id"], max(0, (Catalog.get_cached(part[0]["offer_id"]) if False else part[0].get("own", 0)) or 0)
-    need = sum(r["need"] for r in part if r["status"] in ("urgent", "low"))
-    ship = sum(r.get("ship", 0) for r in part)
-    tiles = [{"name": "Нужно всего, шт", "value": need, "plain": True},
-             {"name": "Везти, шт", "value": ship, "plain": True}]
-    if part[0].get("profit") is not None:
-        tiles.append({"name": "Прибыль 2 мес, ₽", "value": part[0]["profit"], "plain": True})
-    hint = (part[0].get("profit") or 0) > 0 and any(r.get("order") for r in part)
-    sub = (f"{dashboard.ORDER_HINT[0].upper()}{dashboard.ORDER_HINT[1:]}: своего мало, товар в прибыли за 2 мес"
-           if hint else dashboard.short(part[0]["name"], 60))
-    await send_png(msg, lambda p: dashboard.supply_png(offer, sub, part, p, by="cluster", tiles=tiles),
-        f"Поставка: {offer}", kb([[("📋 Что отгрузить", "sup:l"), ("⬅️ Поставки", "sup")]]))
+async def signal_list(msg: Message, key, items=None, title=None, back=("⬅️ Сигналы", "sig")):
+    kind, pick, name, label = SIGNAL_LISTS[key]
+    items = pick(await signal_skus(msg)) if items is None else items
+    await send_png(msg, lambda p: dashboard.signals_png(kind, items, sig_today(), p, title), f"{title or name}: {len(items)} SKU")
+    if items:
+        await msg.answer("Нажмите на артикул — покажу все кластеры:", reply_markup=kb(
+            [[(label(s), f"sig:k:{s['sku']}")] for s in items[:60]] + [[back]]))
+
+
+async def signal_sku(msg: Message, sku):
+    by = await signal_skus(msg)
+    s = by.get(sku)
+    if not s:
+        _, part = await asyncio.to_thread(lambda: signals.build(db, restock.cluster_stocks(oz, [sku]), data_day()))
+        s = part.get(sku)
+    if not s:
+        return await msg.answer("По этому артикулу нет остатков и продаж в кластерах Ozon.", reply_markup=SIGNALS_MENU)
+    caption = f"{s['offer_id']}: " + (f"отгрузить до {dashboard.ship_date(s['ship_by'], sig_today())}" if s["ship"]
+                                      else "отгружать пока рано")
+    if s["resort"]:
+        caption += ", есть пересорт"
+    caption += ".\nСколько штук и в какие кластеры — в боте поставок."
+    await send_png(msg, lambda p: dashboard.sku_signals_png(s, sig_today(), p), caption,
+                   kb([[("⏰ Пора отгрузить", "sig:s"), ("⬅️ Сигналы", "sig")]]))
+
+
+async def category_signals(msg: Message, type_id):
+    by = await signal_skus(msg)
+    skus = {r[0] for r in db.execute("select sku from sku where type_id = ?", (type_id,))}
+    title = db.execute("select type_name from sku where type_id = ? limit 1", (type_id,)).fetchone()[0]
+    part = {k: v for k, v in by.items() if k in skus}
+    await signal_list(msg, "s", signals.to_ship(part), f"Пора отгрузить: {dashboard.short(title, 18)}")
+    resort = signals.resort(part)
+    if resort:
+        await signal_list(msg, "x", resort, f"Пересорт: {dashboard.short(title, 22)}")
 
 
 def render_morning(prefix):
@@ -310,39 +313,22 @@ async def on_button(cb: CallbackQuery):
     elif d == "ask_sku":
         waiting[cb.from_user.id] = "card"
         await msg.answer("Пришлите артикул (например OZ353NEW2) или SKU Ozon.")
-    elif d == "sup":
-        await msg.answer("Поставки по кластерам Ozon. Норма — запас кластера на 20 дней, везём до 30.", reply_markup=SUPPLY_MENU)
-    elif d == "sup:w":
-        cl = restock.by_cluster(await supply_rows(msg))
-        if not cl:
-            return await msg.answer("Везти никуда не нужно: во всех кластерах запас больше 20 дней.",
-                                    reply_markup=SUPPLY_MENU)
-        await msg.answer("Кластеры, куда пора везти. «Везти X из Y»: Y — нужно до 30 дней, X — есть на своём складе:", reply_markup=kb(
-            [[(f"{'🔴' if c['urgent'] else '🟠'} {c['cluster'][:22]} · везти {c['ship']} из {c['need']} шт", f"sup:w:{i}")]
-             for i, c in enumerate(cl[:40])] + [[("⬅️ Поставки", "sup")]]))
-    elif d.startswith("sup:w:"):
-        await supply_cluster(msg, int(d[6:]))
-    elif d == "sup:a":
-        waiting[cb.from_user.id] = "supply"
-        await msg.answer("Пришлите артикул — покажу, в какие кластеры и сколько везти.")
-    elif d == "sup:l":
-        sk = restock.by_sku(await supply_rows(msg))
-        if not sk:
-            return await msg.answer("Отгружать нечего: запаса везде больше 20 дней.", reply_markup=SUPPLY_MENU)
-        await msg.answer(f"Нужна отгрузка: {len(sk)} артикулов. Сверху — что можно везти со своего склада, "
-                         "ниже — чего на своём складе нет:",
-                         reply_markup=kb([[(f"{s['offer_id'][:20]} · {s['clusters']} скл · "
-                                            + (f"везти {s['ship']} шт" if s["ship"] else
-                                               "своего нет" + (" · к заказу" if (s.get("profit") or 0) > 0 else "")),
-                                            f"sup:k:{s['sku']}")] for s in sk[:80]] + [[("⬅️ Поставки", "sup")]]))
-    elif d.startswith("sup:k:"):
-        await supply_sku(msg, d[6:])
+    elif d == "sig":
+        await msg.answer("Сигналы по остаткам Ozon: когда отгружать, где пересорт, что уходит в платное хранение. "
+                         "Скорость — с учётом сезона. Штуки по кластерам считает бот поставок.", reply_markup=SIGNALS_MENU)
+    elif d in ("sig:s", "sig:x", "sig:p"):
+        await signal_list(msg, d[4:])
+    elif d == "sig:a":
+        waiting[cb.from_user.id] = "signals"
+        await msg.answer("Пришлите артикул — покажу запас по кластерам и когда отгружать.")
+    elif d.startswith("sig:k:"):
+        await signal_sku(msg, d[6:])
     elif d.startswith("p:"):
         _, t, key, kind = d.split(":")
         await card(msg, f"{t}:{key}", kind)
     elif d.startswith("r:"):
-        await msg.answer("Собираю остатки по кластерам…")
-        await restock_card(msg, d[2:])
+        t, key = d[2:].split(":", 1)
+        await (category_signals(msg, key) if t == "c" else signal_sku(msg, key))
 
 
 async def users_button(msg: Message, admin, d):
@@ -390,8 +376,8 @@ async def on_text(msg: Message):
     s = store.find_sku(db, msg.text)
     if not s:
         return await msg.answer("Не нашёл такой артикул в продажах за 120 дней. Проверьте код.", reply_markup=MENU)
-    if waiting.pop(msg.from_user.id, "card") == "supply":
-        return await supply_sku(msg, s["sku"])
+    if waiting.pop(msg.from_user.id, "card") == "signals":
+        return await signal_sku(msg, s["sku"])
     await card(msg, f"s:{s['sku']}", "week")
 
 

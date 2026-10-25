@@ -1,4 +1,6 @@
 """PNG-дашборды для Telegram: плитки, график, таблица товаров, воронка, подгрузка."""
+from datetime import timedelta
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -199,90 +201,111 @@ def card_png(title, data, prefix, top_rows=None):
 
 
 ORDER_HINT = "рекомендую к заказу"
-SUPPLY_COLS = [(0.05, "", "left"), (0.50, "есть", "right"), (0.62, "дней", "right"), (0.77, "нужно", "right"),
-               (0.95, "везти", "right")]
+SIGNAL_NOTE = ("Скорость — заказы за 14 дней с поправкой на сезонность категории. До приёмки — 7 дней.\n"
+               "Сколько штук везти в какой кластер, считает бот поставок.")
+SIGNAL_COLOR = {"zero": BAD, "late": BAD, "ship": WARN, "ok": GOOD, "slow": MUTED, "excess": EXCESS, "none": MUTED}
 
 
-def supply_row(r, label, sub, hint=True):
-    """Строка «грузить»: полная потребность склада и сколько везти из своего остатка."""
-    col = BAD if r["status"] == "urgent" else WARN
-    d = f"{r['days']:.0f}" if r["days"] is not None else "—"
-    ship = r.get("ship", r["need"])
-    act = (f"{num(ship)} шт", INK, True) if ship else ("своего нет", MUTED, True)
-    if hint and r.get("order") and (r.get("profit") or 0) > 0:
-        sub = f"{sub} · {ORDER_HINT}"
-    return ([(label, col, True), (num(r["stock"] + r["transit"]), INK, False), (d, col, True),
-             (num(r["need"]), INK, False), act], sub)
+def ship_date(d, today):
+    return "срочно" if d is None or d <= today else f"{d:%d.%m}"
 
 
-def excess_row(r, label, sub, hint=True):
-    d = f"{r['days']:.0f}" if r["days"] is not None else "—"
-    return ([(label, EXCESS, True), (num(r["stock"] + r["transit"]), INK, False), (d, EXCESS, True),
-             None, (f"лишние ~{num(r['excess'])}", EXCESS, True)], sub)
+def _zero_in(r):
+    return "сейчас" if r["signal"] == "zero" or not r["days"] else f"{r['days']} дн"
 
 
-def supply_png(title, subtitle, rows, prefix, by="offer", tiles=None, per_sheet=12, max_sheets=4):
-    """Поставки: по кластеру (строки — артикулы) или по артикулу (строки — кластеры). Возвращает пути PNG."""
-    load = [r for r in rows if r["status"] in ("urgent", "low") and r["need"] > 0]
-    excess = [r for r in rows if r["status"] == "excess"] if by == "cluster" else []
-    first = "Кластер" if by == "cluster" else "Артикул"
-    cols = [(SUPPLY_COLS[0][0], first, "left")] + SUPPLY_COLS[1:]
+def _names(rs, n=3):
+    names = [short(r["cluster"].split(",")[0], 16) for r in rs[:n]]
+    return ", ".join(names) + (f" +{len(rs) - n}" if len(rs) > n else "")
 
-    def fmt(r, fn):
-        if by == "cluster":
-            return fn(r, f"● {short(r['cluster'], 22)}", f"продаёт {r['ads']:.1f} шт/день", hint=False)
-        return fn(r, r["offer_id"], short(r["name"], 48))
 
-    chunks = [load[i:i + per_sheet] for i in range(0, len(load), per_sheet)][:max_sheets] or [[]]
-    n, paths = len(chunks), []
+SHIP_COLS = [(0.05, "Товар", "left"), (0.45, "в день", "right"), (0.62, "ноль через", "right"),
+             (0.80, "отгрузить до", "right"), (0.95, "свой", "right")]
+PAID_COLS = [(0.05, "Товар", "left"), (0.48, "на Ozon", "right"), (0.62, "в день", "right"),
+             (0.78, "оборач.", "right"), (0.95, "статус", "right")]
+GRADE = {"GRADES_CRITICAL": ("критично", BAD), "GRADES_RED": ("платное", BAD), "GRADES_YELLOW": ("скоро", WARN)}
+
+
+def ship_row(s, today):
+    first = s["ship"][0]
+    red = any(r["signal"] in ("zero", "late") for r in s["ship"])
+    own = s.get("own")
+    own_cell = ("—", MUTED, False) if own is None else (num(own), INK, True) if own > 0 else ("0", BAD, True)
+    sub = f"{len(s['ship'])} кл.: {_names(s['ship'])}"
+    if own is not None and own <= 0 and (s.get("profit") or 0) > 0:
+        sub += f" · {ORDER_HINT}"
+    return ([(s["offer_id"], BAD if red else WARN, True), (f"{s['speed']:.1f}", INK, False),
+             (_zero_in(first), BAD if red else WARN, True), (ship_date(s["ship_by"], today), INK, True), own_cell],
+            short(sub, 70))
+
+
+def paid_row(s):
+    return ([(s["offer_id"], INK, True), (num(s["stock"]), INK, False), (f"{s['speed']:.1f}", INK, False),
+             (f"{s['turnover']:.0f} дн" if s.get("turnover") else "—", INK, False), (*GRADE[s["grade"]], True)],
+            short(s["name"], 60))
+
+
+def _sheets(title, subtitle, table, cols, rows, empty, prefix, note, per_sheet=14, max_sheets=3, tiles=None):
+    chunks = [rows[i:i + per_sheet] for i in range(0, len(rows), per_sheet)][:max_sheets] or [[]]
+    paths, n = [], len(chunks)
     for i, part in enumerate(chunks):
-        last = i == n - 1
-        n_rows = max(1, len(part)) + (max(1, len(excess)) if last and excess else 0)
-        p = Page(0.35 + 0.78 + (1.0 if tiles and i == 0 else 0) + 1.0 * (1 + (last and bool(excess)))
-                 + 0.42 * n_rows + 0.7, SHEET_W)
-        p.header(f"{i + 1}/{n} · {short(title, 28)}" if n > 1 else short(title, 32), subtitle)
+        p = Page(0.35 + 0.78 + (1.0 if tiles and i == 0 else 0) + 1.0 + 0.42 * max(1, len(part)) + 0.75, SHEET_W)
+        p.header(f"{i + 1}/{n} · {title}" if n > 1 else title, subtitle)
         if tiles and i == 0:
             p.tiles(tiles)
-        p.table("Грузить: запаса меньше 20 дней", cols,
-                [fmt(r, supply_row) for r in part] or [([("● везти не нужно", GOOD, True), None, None, None, None], "")])
-        if last and excess:
-            p.table("Перебор: больше 60 дней", cols, [fmt(r, excess_row) for r in excess])
-        more = len(load) - per_sheet * max_sheets
-        _save(p, prefix, paths, ("Есть — в кластере Ozon с учётом пути. Нужно — до 30 дней продаж. "
-                                 "Везти — из своего остатка\n(МойСклад), сначала туда, где кончится раньше. "
-                                 f"«{ORDER_HINT}» — своего мало,\nа товар в чистой прибыли за 2 месяца.")
-              + (f"\nЕщё {more} строк не поместились — смотрите по артикулу." if last and more > 0 else ""))
+        p.table(table, cols, part or [([(empty, GOOD, True)] + [None] * (len(cols) - 1), "")])
+        more = len(rows) - per_sheet * max_sheets
+        _save(p, prefix, paths, note + (f"\nЕщё {more} строк — в списке кнопок ниже." if i == n - 1 and more > 0 else ""))
     return paths
 
 
-def restock_png(title, rows, summary, prefix, limit=8):
-    """Сценарий 3 из карточки категории или артикула: листы «грузить» и «перебор». Возвращает пути PNG."""
-    load = [r for r in rows if r["status"] in ("urgent", "low") and r["need"] > 0][:limit]
-    excess = sorted([r for r in rows if r["status"] == "excess"], key=lambda r: -r["excess"])[:limit]
-    cols = [(0.05, "Кластер · товар", "left")] + SUPPLY_COLS[1:]
+def signals_png(kind, items, today, prefix, title=None):
+    """Сигналы по остаткам: kind = ship | resort | paid. items — сводки по SKU из signals.build."""
+    if kind == "ship":
+        cols = SHIP_COLS
+        rows = [ship_row(x, today) for x in items]
+        return _sheets(title or "Пора отгрузить", f"Ozon · запас кончится в ближайшие 3 недели · {len(items)} SKU",
+                       "Кластеры, где кончается товар", cols, rows, "● отгружать пока рано", prefix,
+                       SIGNAL_NOTE + "\nСвой — остаток МоегоСклада.")
+    if kind == "resort":
+        cols = [(0.05, "Товар", "left"), (0.50, "в день", "right"), (0.72, "лишнее, кл.", "right"),
+                (0.95, "кончается, кл.", "right")]
+        rows = [([(s["offer_id"], WARN, True), (f"{s['speed']:.1f}", INK, False),
+                  (str(len(s["excess"])), EXCESS, True), (str(len(s["ship"])), BAD, True)],
+                 short(f"лишнее: {_names(s['excess'], 2)} · кончается: {_names(s['ship'], 2)}", 72)) for s in items]
+        return _sheets(title or "Пересорт", f"Ozon · в одних кластерах перебор, в других кончается · {len(items)} SKU",
+                       "Перекос остатков между кластерами", cols, rows, "● перекосов нет", prefix,
+                       "Лишнее — запаса больше чем на 60 дней (или нет продаж). Кончается — меньше 3 недель.\n"
+                       "Новые поставки — туда, где кончается; в «лишние» кластеры пока не везти.\n"
+                       "Сколько штук и куда, считает бот поставок.")
+    cols = PAID_COLS
+    rows = [paid_row(x) for x in items]
+    return _sheets(title or "Платное хранение", f"Ozon · оценка оборачиваемости Ozon · {len(items)} SKU",
+                   "Товары с долгой оборачиваемостью", cols, rows, "● платного хранения нет", prefix,
+                   "Статус — оценка Ozon по оборачиваемости SKU. Что делать: не везти, акция или вывоз.\n"
+                   "Источник: Ozon Seller API.")
 
-    def label(r):
-        return f"● {short(r['cluster'], 20)}", f"{r['offer_id']} · {short(r['name'], 40)}"
 
-    paths = []
-    p = Page(0.35 + 0.78 + 1.0 + 1.0 + 0.42 * max(1, len(load)) + 0.7, SHEET_W)
-    p.header("1/2 · Грузить", f"Подгрузка: {title} · норма ≥ 20 дн")
-    p.tiles([
-        {"name": "Всего на Ozon, шт", "value": summary["stock"], "plain": True},
-        {"name": "Продажи в день, шт", "value": summary["ads"], "plain": True},
-        {"name": "Хватит на, дн", "value": summary["days"] or 0, "plain": True},
-    ])
-    p.table("Запаса меньше 20 дней", cols, [supply_row(r, *label(r)) for r in load]
-            or [([("● везде норма", GOOD, True), None, None, None, None], "")])
-    _save(p, prefix, paths, "Нужно — до 30 дней продаж. Везти — из своего остатка (МойСклад), сначала туда,\n"
-          f"где кончится раньше. «{ORDER_HINT}» — своего мало, а товар в прибыли за 2 мес.")
-    p = Page(0.35 + 0.78 + 1.0 + 0.42 * max(1, len(excess)) + 0.7, SHEET_W)
-    p.header("2/2 · Перебор", f"Подгрузка: {title} · перебор > 60 дн")
-    p.table("Оборачиваемость больше 60 дней", cols, [excess_row(r, *label(r)) for r in excess]
-            or [([("● перебора нет", GOOD, True), None, None, None, None], "")])
-    _save(p, prefix, paths, "Лишнее — сверх 60 дней продаж: вывезти или переместить.\n"
-          "Скорость по кластеру — средняя по данным Ozon.")
-    return paths
+def sku_signals_png(s, today, prefix):
+    """Сигналы одного артикула по всем кластерам."""
+    cols = [(0.05, "Кластер", "left"), (0.45, "есть", "right"), (0.60, "в день", "right"), (0.78, "хватит", "right"),
+            (0.95, "отгрузить до", "right")]
+    order = {"zero": 0, "late": 1, "ship": 2, "ok": 3, "excess": 4, "slow": 5, "none": 6}
+    cl = sorted((r for r in s["clusters"] if r["signal"] != "none"), key=lambda r: (order[r["signal"]], r["days"] or 999))
+    rows = []
+    for r in cl:
+        col = SIGNAL_COLOR[r["signal"]]
+        days = "ноль" if r["signal"] == "zero" else f"{r['days']} дн" if r["days"] is not None else "> полгода"
+        when = ship_date(r["ship_by"], today) if r["signal"] in ("zero", "late", "ship") else "—"
+        rows.append(([(f"● {short(r['cluster'], 22)}", col, True), (num(r["stock"] + r["transit"]), INK, False),
+                      (f"{r['speed']:.1f}", INK, False), (days, col, True), (when, INK, True)],
+                     f"в пути {num(r['transit'])} шт" if r["transit"] else ""))
+    tiles = [{"name": "Продажи в день, шт", "value": s["speed"], "plain": True},
+             {"name": "Через месяц в день", "value": s["speed_next"], "plain": True},
+             {"name": "Пора отгрузить, кл.", "value": len(s["ship"]), "plain": True}]
+    sub = short(s["name"], 60) if not s["resort"] else "Пересорт: в одних кластерах перебор, в других кончается"
+    return _sheets(short(s["offer_id"], 28), sub, "Запас по кластерам с учётом сезона", cols, rows,
+                   "● нет остатков и продаж", prefix, SIGNAL_NOTE, per_sheet=16, tiles=tiles)
 
 
 def _chg(cur, old):
@@ -357,27 +380,23 @@ def morning_png(m, prefix):
     p.table("Удержания Ozon (штрафы — красным)", cols, rows)
     done(p, "Итого ДРР — весь расход на рекламу ко всем заказам за день.\nИсточники: Ozon Performance API, Ozon Seller API.")
 
-    # 3. Остатки
-    p = sheet(3, "Остатки и хранение", 2, max(1, len(ending)) + max(1, len(excess)))
-    cols = [(0.05, "Товар", "left"), (0.45, "на Ozon", "right"), (0.60, "в день", "right"), (0.74, "хватит", "right"),
-            (0.95, "свой склад", "right")]
-    rows = []
-    for x in ending:
-        own = (m["ms"].get(x["offer_id"]) or {}).get("stock", 0)
-        good = (m.get("profits", {}).get(str(x.get("sku"))) or {}).get("profit", 0) > 0
-        rows.append(([(x["offer_id"], INK, True), (num(x["current_stock"]), INK, False), (f"{x['ads']:.1f}", INK, False),
-                      (f"{x['idc']:.0f} дн", BAD, True),
-                      (f"{num(own)} шт", INK, True) if own > 0 else ("0", BAD, True)],
-                     short(x["name"], 48) if own > 0 or not good else f"{short(x['name'], 34)} · {ORDER_HINT}"))
-    p.table(f"Скоро закончится: меньше 20 дней ({len(m['ending'])} SKU)", cols,
-            rows or [([("● всё в норме", GOOD, True), None, None, None, None], "")])
+    # 3. Остатки: сигналы
+    ship = m.get("ship")
+    p = sheet(3, "Остатки и хранение", 2, max(1, len((ship or [])[:8])) + max(1, len(excess)))
+    if ship is None:
+        rows = [([("● сигналы не посчитались, см. кнопку «Сигналы»", MUTED, True), None, None, None, None], "")]
+    else:
+        today = m["day"] + timedelta(days=1)
+        rows = [ship_row(x, today) for x in ship[:8]] or [([("● отгружать пока рано", GOOD, True), None, None, None, None], "")]
+    resort = f", пересорт у {len(m['resort'])}" if m.get("resort") else ""
+    p.table(f"Пора отгрузить: {len(ship or [])} SKU{resort}", SHIP_COLS, rows)
     cols = [(0.05, "Товар", "left"), (0.58, "остаток", "right"), (0.76, "в день", "right"), (0.95, "оборач.", "right")]
-    rows = [([(x["offer_id"], INK, True), (num(x["current_stock"]), INK, False), (f"{x['ads']:.1f}", INK, False),
-              (f"{x['turnover']:.0f} дн", EXCESS, True)], short(x["name"], 48)) for x in excess]
     p.table(f"Платное хранение: красных {len(m['excess'])}, скоро {len(m['soon'])} SKU", cols,
-            rows or [([("● перебора нет", GOOD, True), None, None, None], "")])
-    done(p, "Полный список по кластерам — кнопка «Поставки» в меню. Свой склад — МойСклад.\n"
-         f"«{ORDER_HINT}» — своего нет, а товар в чистой прибыли с 1-го числа прошлого месяца.")
+            [([(x["offer_id"], INK, True), (num(x["current_stock"]), INK, False), (f"{x['ads']:.1f}", INK, False),
+               (f"{x['turnover']:.0f} дн", EXCESS, True)], short(x["name"], 48)) for x in excess]
+            or [([("● перебора нет", GOOD, True), None, None, None], "")])
+    done(p, "Ноль через — по скорости за 14 дней с поправкой на сезон. Отгрузить до — с учётом 7 дней до приёмки.\n"
+         "Списки и пересорт — кнопка «Сигналы». Штуки по кластерам считает бот поставок.")
 
     # 4. Рейтинг и МойСклад
     n_drops = 1 if not drops else len(drops[:6])
