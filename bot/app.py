@@ -24,6 +24,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
 from bot import cards, dashboard, morning, profit, restock, signals, store
 from bot.category_report import MSK
+from bot.sources import gsheet_costs
 from bot.sources.moysklad import Catalog
 from bot.sources.ozon import OzonClient
 from bot.sources.performance import PerformanceClient
@@ -447,6 +448,10 @@ async def on_text(msg: Message):
 
 
 def refresh_data():
+    try:
+        log.info("себестоимость из таблицы: %s", gsheet_costs.refresh())
+    except Exception:
+        log.exception("таблица себестоимости не прочиталась, работаю со старым файлом")
     store.refresh(db, yesterday(), oz)
     store.set_offer_ids(db, oz.stocks())
     log.info("данные обновлены по %s", store.last_day(db))
