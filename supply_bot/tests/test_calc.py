@@ -224,3 +224,6 @@ def test_shortage_min_days_to_all_rest_to_main_cluster():
     by = {ln.warehouse: ln.qty for ln in calc.build(s).lines}
     # каждому запас на 14 дней, остаток — Москве, где артикул продаётся больше всего
     assert by == {"Москва, МО и Дальние регионы": 440, "Казань": 140, "Санкт-Петербург и СЗО": 20}
+    plan = calc.build(s)
+    assert all("не хватает ФФ: потребность всех кластеров 1145 шт больше свободного на ФФ 600 шт" in ln.flags[0]
+               for ln in plan.lines)

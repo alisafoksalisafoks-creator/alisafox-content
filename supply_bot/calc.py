@@ -448,6 +448,11 @@ def build(snap, overrides=None):
         ff = ms_by[key]
         _fit(group, ff["free"])
         ff["used"] = sum(ln.qty for ln in group)
+        total = sum(ln.need for ln in group)
+        if total > ff["free"]:
+            for ln in group:
+                ln.flags.insert(0, f"не хватает ФФ: потребность всех кластеров {total} шт больше свободного на ФФ "
+                                   f"{ff['free']} шт — сюда {ln.qty} из {ln.need}")
         for ln in group:
             if ln.manual and ln.qty > ln.need + ln.speed * config.ROUND_UP_EXTRA_DAYS and ln.speed:
                 ln.flags.append(f"запас после поставки {(ln.have + ln.qty) / ln.speed - ln.lead:.0f} дн — больше 30")
