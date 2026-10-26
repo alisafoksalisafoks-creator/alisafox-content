@@ -68,8 +68,11 @@ def summary(plan, taken_at=""):
 
 def warehouse(plan, name):
     items = [x for x in plan.lines if x.warehouse == name and x.qty > 0]
+    stop = [f"⬜ <code>{escape(x['offer'])}</code> — не везём (нужно было бы {fmt(x['need'])}): {escape(x['reason'])}"
+            for x in plan.stopped.get(name, [])]
+    stop = (["", "<b>Решить / стоп</b> — не везём, в итог не входят:"] + stop) if stop else []
     if not items:
-        return [f"В {escape(name)} сейчас везти нечего."]
+        return chunks([f"В {escape(name)} сейчас везти нечего."] + stop)
     where = items[0].cluster if items[0].cluster != name else "кластер"
     ship = f"склад приёмки: {escape(items[0].ship_to)}" if items[0].ship_to else ""
     head = [f"<b>{escape(name)}</b> · {escape(where)}" + (f"\n{ship} (подсказка)" if ship else ""),
@@ -88,7 +91,7 @@ def warehouse(plan, name):
                     f"   {ln.sales14} шт за 14 дн → {ln.speed:.1f}/дн × ({ln.lead}+{config.TARGET_DAYS}) − "
                     f"{fmt(ln.have)} на Ozon = {fmt(ln.need)} → везём {fmt(ln.qty)}"
                     + ("" if ln.qty == ln.need else " (по коробам, в пределах нашего склада)"))
-    return chunks(head + rows)
+    return chunks(head + rows + stop)
 
 
 def all_warehouses(plan):

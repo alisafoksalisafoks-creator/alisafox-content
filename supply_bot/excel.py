@@ -10,6 +10,8 @@ BOLD = Font(bold=True)
 HEAD = PatternFill("solid", fgColor="DDE7F0")
 TOTAL = PatternFill("solid", fgColor="F2F2F2")
 PARTIAL_FILL = PatternFill("solid", fgColor="FFF2A8")
+STOP_FILL = PatternFill("solid", fgColor="EDEDED")
+STOP_FONT = Font(color="808080")
 
 
 def _sheet(wb, title, header, rows, widths=None):
@@ -52,6 +54,12 @@ def _distribution(wb, plan, groups):
         ws.append(row)
         for c in ws[ws.max_row]:
             c.font, c.fill = BOLD, TOTAL
+        # «Решить / стоп» — серым под итогом, в итог не входят; в скобках потребность, если бы везли
+        for x in plan.stopped.get(wh, []):
+            ws.append([wh, lines[0].cluster if lines else wh, "", x["offer"], f"({x['need']})", "—", None, None,
+                       None, "не везём", "не везём: " + x["reason"]])
+            for c in ws[ws.max_row]:
+                c.fill, c.font = STOP_FILL, STOP_FONT
     for c in ws["I"][1:]:
         c.number_format = "DD.MM.YYYY"
 

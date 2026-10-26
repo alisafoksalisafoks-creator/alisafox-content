@@ -84,6 +84,7 @@ class Plan:
     duplicates: list = field(default_factory=list)
     ff: dict = field(default_factory=dict)          # {ключ МС: {article, stock, unshipped, free, used}}
     notes: list = field(default_factory=list)
+    stopped: dict = field(default_factory=dict)     # {кластер: [{offer, need, reason}]} — «Решить / стоп» под итогом кластера
 
     def by_warehouse(self):
         out = defaultdict(list)
@@ -474,6 +475,18 @@ def build(snap, overrides=None):
     for offer, e in eligible.items():
         roots[e["u"]["root"]].add(e["name"])
     plan.duplicates = [{"root": r, "offers": sorted(o)} for r, o in roots.items() if len(o) > 1]
+    # --- «Решить / стоп» по кластерам: сколько было бы нужно, если везти (серые строки под итогом) ---
+    for x in plan.decide:
+        o = norm(x["offer"])
+        for (oo, cl), v in s14c.items():
+            if oo != o or not cl:
+                continue
+            st = stock_c.get((o, cl), zero)
+            need = round(v / config.SALES_DAYS * (config.lead_days(cl) + config.TARGET_DAYS) - st["available"] - st["transit"])
+            if need > 0:
+                plan.stopped.setdefault(cl, []).append({"offer": x["offer"], "need": need, "reason": x["reason"]})
+    for items in plan.stopped.values():
+        items.sort(key=lambda x: -x["need"])
     return plan
 
 
