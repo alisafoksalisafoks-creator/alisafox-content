@@ -412,8 +412,12 @@ async def pos_day(msg: Message):
 
 async def pos_items(msg: Message, target):
     """target: n — новинки (Супер), c<type_id> — категория, s<sku> — один артикул. → (название, артикулы)."""
-    if target == "n":
-        return "Новинки (Супер)", await asyncio.to_thread(positions.super_skus, oz)
+    if target.startswith("n"):  # n — все новинки, n<type_id> — новинки одной категории
+        items = await asyncio.to_thread(positions.super_skus, oz)
+        if target == "n":
+            return "Новинки (Супер)", items
+        row = db.execute("select type_name from sku where type_id = ? limit 1", (target[1:],)).fetchone()
+        return f"Новинки: {row[0] if row else 'прочее'}", [x for x in items if x["type_id"] == target[1:]]
     if target.startswith("c"):
         tid = target[1:]
         row = db.execute("select type_name from sku where type_id = ? limit 1", (tid,)).fetchone()
@@ -439,11 +443,30 @@ async def pos_list(msg: Message, target):
     sub = f"Ozon · {day:%d.%m.%Y} · {len(rows)} SKU · сначала упавшие"
     await send_png(msg, lambda p: dashboard.positions_list_png(dashboard.short(title, 30), sub, rows, positions.move, p),
                    f"Позиции: {title} за {day:%d.%m.%Y}")
-    back = ("⬅️ Категории", "pos:c") if target.startswith("c") else ("⬅️ Позиции", "pos")
+    back = ("⬅️ Категории", "pos:c") if target.startswith("c") else ("⬅️ Новинки", "pos:n")
     await msg.answer("Нажмите на артикул — покажу позицию по дням за 28 дней:", reply_markup=kb(
         [[(f"{(r['offer_id'] or r['sku'])[:20]} · {dashboard._pos(r['pos'])} {positions.move(r['pos'], r['prev'])[0]}",
            f"pos:s:{r['sku']}")] for r in rows[:60]]
         + [excel_kb(target), [("🔎 Ввести артикул", "pos:a"), back]]))
+
+
+async def pos_new_cats(msg: Message):
+    """Новинки по категориям: в кнопке — сколько артикулов и сколько упали к предыдущему дню."""
+    day = await pos_day(msg)
+    items = await asyncio.to_thread(positions.super_skus, oz)
+    names = dict(db.execute("select type_id, type_name from sku"))
+    cats = {}
+    for r in await asyncio.to_thread(positions.summary, db, items, day):
+        cats.setdefault(r["type_id"], []).append(r)
+    buttons = []
+    for tid, rows in sorted(cats.items(), key=lambda x: -len(x[1])):
+        down = sum(1 for r in rows if positions.move(r["pos"], r["prev"])[1] == "down")
+        label = f"{dashboard.short(names.get(tid) or 'Прочее', 34)} · {len(rows)}" + (f" · ▼{down}" if down else "")
+        buttons.append((label, f"pos:n:{tid}"))
+    await msg.answer(f"Новинки со статусом «Супер»: {len(items)} SKU. Выберите категорию "
+                     "(▼ — сколько упали к предыдущему дню):", reply_markup=kb(
+                         [[b] for b in buttons] + [[("📥 Excel по всем новинкам, 28 дн", "pos:x:n:28")],
+                                                   [("⬅️ Позиции", "pos")]]))
 
 
 async def pos_sku(msg: Message, sku):
@@ -489,7 +512,9 @@ async def pos_button(msg: Message, user, d):
         await msg.answer("Средняя позиция артикула в поиске и каталоге Ozon по дням. Что смотрим?", reply_markup=POS_MENU)
     elif d == "pos:n":
         await msg.answer("Собираю новинки со статусом «Супер»…")
-        await pos_list(msg, "n")
+        await pos_new_cats(msg)
+    elif d.startswith("pos:n:"):
+        await pos_list(msg, "n" + d[6:])
     elif d == "pos:c":
         rows = store.categories(db, data_day() - timedelta(days=29))[:24]
         buttons = [(r["type_name"][:30], f"pos:c:{r['type_id']}") for r in rows]

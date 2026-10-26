@@ -36,7 +36,7 @@ def super_skus(oz: OzonClient):
         for x in oz.post("/v3/product/info/list", {"product_id": ids[i:i + 1000]}).get("items", []):
             if x.get("is_super") and x.get("sku") and not x.get("is_archived"):
                 out.append({"sku": str(x["sku"]), "offer_id": x["offer_id"], "name": x["name"],
-                            "created": x.get("created_at", "")[:10]})
+                            "type_id": str(x.get("type_id") or ""), "created": x.get("created_at", "")[:10]})
     out.sort(key=lambda x: x["created"], reverse=True)
     _super.update(at=time.time(), skus=out)
     return out
