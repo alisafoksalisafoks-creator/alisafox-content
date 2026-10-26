@@ -439,14 +439,15 @@ async def pos_list(msg: Message, target):
     title, items = await pos_items(msg, target)
     if not items:
         return await msg.answer("Здесь нет артикулов.", reply_markup=POS_MENU)
-    rows = await asyncio.to_thread(positions.summary, db, items, day)
-    sub = f"Ozon · {day:%d.%m.%Y} · {len(rows)} SKU · сначала упавшие"
-    await send_png(msg, lambda p: dashboard.positions_list_png(dashboard.short(title, 30), sub, rows, positions.move, p),
-                   f"Позиции: {title} за {day:%d.%m.%Y}")
+    days, rows = await asyncio.to_thread(positions.matrix, db, items, day)
+    sub = f"Ozon · {days[0]:%d.%m}–{day:%d.%m} · {len(rows)} SKU · сначала упавшие"
+    await send_png(msg, lambda p: dashboard.positions_matrix_png(dashboard.short(title, 30), sub, rows, days,
+                                                                  positions.move, p),
+                   f"Позиции: {title}, {days[0]:%d.%m}–{day:%d.%m}")
     back = ("⬅️ Категории", "pos:c") if target.startswith("c") else ("⬅️ Новинки", "pos:n")
-    await msg.answer("Нажмите на артикул — покажу позицию по дням за 28 дней:", reply_markup=kb(
-        [[(f"{(r['offer_id'] or r['sku'])[:20]} · {dashboard._pos(r['pos'])} {positions.move(r['pos'], r['prev'])[0]}",
-           f"pos:s:{r['sku']}")] for r in rows[:60]]
+    await msg.answer("Нажмите на артикул — покажу позиции по дням за 28 дней:", reply_markup=kb(
+        [[(f"{(r['offer_id'] or r['sku'])[:20]} · {dashboard._pos(r['cells'][-1])} "
+           f"{positions.move(r['cells'][-1], r['cells'][-2])[0]}", f"pos:s:{r['sku']}")] for r in rows[:60]]
         + [excel_kb(target), [("🔎 Ввести артикул", "pos:a"), back]]))
 
 
@@ -477,7 +478,8 @@ async def pos_sku(msg: Message, sku):
     sub = f"Ozon · {dashboard.short(s['name'], 40) if s else sku} · 28 дн по {day:%d.%m}"
     lab = positions.move(c["cur"], c["prev"])[0]
     best = f", лучшая {dashboard._pos(c['best'][1])} ({c['best'][0]:%d.%m})" if c["best"] else ""
-    await send_png(msg, lambda p: dashboard.position_png(name, sub, c, positions.move, p),
+    days, rows = positions.matrix(db, [{"sku": sku}], day, positions.SPAN)
+    await send_png(msg, lambda p: dashboard.position_calendar_png(name, sub, rows[0]["cells"], days, positions.move, p),
                    f"{name}: позиция {dashboard._pos(c['cur'])} за {day:%d.%m} ({lab} к пред. дню). "
                    f"За 28 дней: средняя {dashboard._pos(c['avg'])}{best}.",
                    kb([excel_kb(f"s{sku}"), [("⭐ Новинки", "pos:n"), ("⬅️ Позиции", "pos")]]))

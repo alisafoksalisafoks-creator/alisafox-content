@@ -83,6 +83,15 @@ def summary(db, items, day: date):
     return sorted(out, key=lambda r: (r["pos"] is None, r["d1"] if r["d1"] is not None else 0))
 
 
+def matrix(db, items, end: date, n=7):
+    """Таблица артикул × дни: (дни, строки). В cells n+1 значений: день перед периодом и сами дни.
+    Сначала те, кто сильнее упал к предыдущему дню, без данных — в конце."""
+    start = end - timedelta(days=n - 1)
+    days = [start + timedelta(days=i) for i in range(n)]
+    rows = [{**it, "cells": [p for _, p, _ in series(db, it["sku"], start - timedelta(days=1), end)]} for it in items]
+    return days, sorted(rows, key=lambda r: (r["cells"][-1] is None, change(r["cells"][-1], r["cells"][-2]) or 0))
+
+
 def sku_card(db, sku, day: date):
     s = series(db, sku, day - timedelta(days=SPAN - 1), day)
     prev = series(db, sku, day - timedelta(days=2 * SPAN - 1), day - timedelta(days=SPAN))

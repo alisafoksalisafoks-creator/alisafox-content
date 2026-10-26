@@ -440,61 +440,104 @@ def service_label_short(name):
 
 POS_COLOR = {"up": GOOD, "down": BAD, "flat": MUTED, "none": MUTED}
 POS_NOTE = ("Средняя позиция в поиске и каталоге Ozon за день: чем меньше число, тем выше товар.\n"
-            "▲ поднялся · ▼ опустился на столько мест · ≈ изменение меньше 5%. Источник: Ozon Seller API.")
+            "Зелёная ячейка — поднялся к предыдущему дню, красная — опустился. Справа — на сколько мест\n"
+            "изменилась позиция за период (▲ выше, ▼ ниже). Полные 28 дней — в Excel. Источник: Ozon Seller API.")
 
 
 def _pos(p):
     return "—" if p is None else num(p)
 
 
-def positions_list_png(title, subtitle, rows, move, prefix):
-    """Список артикулов: позиция за день, ▲▼ к предыдущему дню и к неделе назад."""
-    cols = [(0.05, "Товар", "left"), (0.52, "позиция", "right"), (0.73, "к пред. дню", "right"),
-            (0.95, "к неделе", "right")]
-    out = []
-    for r in rows:
-        l1, k1 = move(r["pos"], r["prev"])
-        l7, k7 = move(r["pos"], r["week"])
-        out.append(([(r["offer_id"] or r["sku"], INK, True), (_pos(r["pos"]), INK, True),
-                     (l1, POS_COLOR[k1], True), (l7, POS_COLOR[k7], False)], short(r.get("name") or "", 64)))
-    return _sheets(title, subtitle, "Средняя позиция и движение", cols, out, "● нет данных о позициях", prefix,
-                   POS_NOTE, per_sheet=16, max_sheets=4)
+POS_UP, POS_DOWN = "#e3f4e3", "#fbe4e4"  # фон ячейки: поднялся / опустился к предыдущему дню
 
 
-def position_png(title, subtitle, c, move, prefix):
-    """Артикул: график средней позиции по дням за 28 дней (ось перевёрнута: выше — лучше)."""
-    p = Page(0.35 + 0.78 + 3.0 + 0.85, SHEET_W)
+def _cell(fig, x, y, w, h, color):
+    ax = fig.add_axes([x, y, w, h])
+    ax.set_facecolor(color)
+    ax.set_xticks([]), ax.set_yticks([])
+    for s in ax.spines.values():
+        s.set_visible(False)
+
+
+def _bg(cur, old, move):
+    kind = move(cur, old)[1]
+    return POS_UP if kind == "up" else POS_DOWN if kind == "down" else None
+
+
+def positions_matrix_png(title, subtitle, rows, days, move, prefix, per_sheet=16):
+    """Таблица-картинка: строка — артикул, столбцы — дни, в ячейке место.
+    rows: [{"offer_id", "name", "cells": [позиция за день до первого дня, затем по дням]}]."""
+    n = len(days)
+    x0, x1 = 0.05, 0.95
+    first = 0.30  # ширина столбца с артикулом
+    last = 0.10  # столбец «за период»
+    cw = (x1 - x0 - first - last) / n
+    chunks = [rows[i:i + per_sheet] for i in range(0, len(rows), per_sheet)][:4] or [[]]
+    paths = []
+    for k, part in enumerate(chunks):
+        rh = 0.46
+        p = Page(0.35 + 0.78 + 0.5 + rh * max(1, len(part)) + 0.75, SHEET_W)
+        p.header(f"{k + 1}/{len(chunks)} · {title}" if len(chunks) > 1 else title, subtitle)
+        hy = p.y - 0.2
+        p.fig.text(x0, hy / p.h, "Артикул", fontsize=8.5, color=MUTED)
+        for j, d in enumerate(days):
+            p.fig.text(x0 + first + cw * (j + 0.5), hy / p.h, f"{d:%d.%m}", fontsize=8, color=MUTED, ha="center")
+        p.fig.text(x1, hy / p.h, f"за {n} дн", fontsize=8, color=MUTED, ha="right")
+        p.y = hy - 0.12
+        for r in part:
+            p.y -= rh
+            y = p.y / p.h
+            cells = r["cells"]
+            for j in range(n):
+                cur, old = cells[j + 1], cells[j]
+                bg = _bg(cur, old, move)
+                if bg:
+                    _cell(p.fig, x0 + first + cw * j + 0.002, y + 0.03 / p.h, cw - 0.004, (rh - 0.06) / p.h, bg)
+                p.fig.text(x0 + first + cw * (j + 0.5), (p.y + rh / 2) / p.h, _pos(cur), fontsize=9,
+                           color=INK if cur is not None else MUTED, ha="center", va="center",
+                           fontweight="bold" if j == n - 1 else "normal")
+            p.fig.text(x0, (p.y + rh * 0.62) / p.h, short(r["offer_id"], 20), fontsize=9, fontweight="bold", color=INK,
+                       va="center")
+            p.fig.text(x0, (p.y + rh * 0.24) / p.h, short(r.get("name") or "", 34), fontsize=6.5, color=INK2,
+                       va="center")
+            lab, kind = move(cells[-1], next((c for c in cells[1:] if c is not None), None))
+            p.fig.text(x1, (p.y + rh / 2) / p.h, lab if kind != "none" else "—", fontsize=9, fontweight="bold",
+                       color=POS_COLOR[kind], ha="right", va="center")
+            p.fig.add_artist(plt.Line2D([x0, x1], [y] * 2, color=GRID, lw=0.5))
+        if not part:
+            p.y -= rh
+            p.fig.text(x0, p.y / p.h, "● нет данных о позициях", fontsize=9.5, color=MUTED)
+        path = f"{prefix}_{len(paths) + 1}.png"
+        p.footer(POS_NOTE)
+        p.save(path)
+        paths.append(path)
+    return paths
+
+
+def position_calendar_png(title, subtitle, cells, days, move, prefix):
+    """Артикул: таблица-календарь за 28 дней — неделя в строке, в ячейке дата и место."""
+    p = Page(0.35 + 0.78 + 0.45 + 4 * 0.72 + 0.75, SHEET_W)
     p.header(short(title, 30), subtitle)
-    p.text(0.05, 0.35, "Средняя позиция по дням", fontsize=11, fontweight="bold", color=INK)
-    p.y -= 0.32
-    ax = p.box(0.1, 2.0, 0.85)
-    p.y -= 0.35
-    s = c["series"]
-    xs = [i for i, (_, v, _) in enumerate(s) if v is not None]
-    ys = [s[i][1] for i in xs]
-    if ys:
-        ax.plot(xs, ys, color=BLUE, lw=2, marker="o", ms=2.5)
-        ax.scatter([xs[-1]], [ys[-1]], s=28, color=BLUE, zorder=3, edgecolor=SURFACE, linewidth=1.5)
-        ax.annotate(_pos(ys[-1]), (xs[-1], ys[-1]), xytext=(6, 0), textcoords="offset points", fontsize=9,
-                    color=INK, va="center")
-        lo, hi = min(ys), max(ys)
-        pad = max(1, (hi - lo) * 0.12)
-        ax.set_ylim(hi + pad, max(0, lo - pad))  # перевёрнутая ось: 1-е место сверху
-    else:
-        ax.text(0.5, 0.5, "нет данных за 28 дней", ha="center", va="center", color=MUTED, transform=ax.transAxes)
-    step = max(1, len(s) // 4)
-    ticks = sorted(set(list(range(0, len(s), step))[:4] + [len(s) - 1]))
-    ax.set_xticks(ticks, [f"{s[i][0]:%d.%m}" for i in ticks], fontsize=8.5, color=INK2)
-    ax.set_xlim(-0.5, len(s) - 0.5)
-    ax.tick_params(axis="y", labelsize=8.5, colors=INK2, length=0)
-    ax.tick_params(axis="x", length=0)
-    ax.grid(axis="y", color=GRID, lw=0.8)
-    ax.set_facecolor(SURFACE)
-    for side in ("top", "right", "left"):
-        ax.spines[side].set_visible(False)
-    ax.spines["bottom"].set_color(GRID)
+    x0, x1 = 0.05, 0.95
+    cw = (x1 - x0) / 7
+    rh = 0.72
+    p.y -= 0.2
+    for w in range(len(days) // 7):
+        p.y -= rh
+        y = p.y / p.h
+        for j in range(7):
+            i = w * 7 + j
+            cur, old = cells[i + 1], cells[i]
+            _cell(p.fig, x0 + cw * j + 0.004, y + 0.04 / p.h, cw - 0.008, (rh - 0.08) / p.h,
+                  _bg(cur, old, move) or TILE)
+            cx = x0 + cw * (j + 0.5)
+            p.fig.text(cx, (p.y + rh * 0.72) / p.h, f"{days[i]:%d.%m}", fontsize=7.5, color=INK2, ha="center",
+                       va="center")
+            p.fig.text(cx, (p.y + rh * 0.36) / p.h, _pos(cur), fontsize=12, fontweight="bold",
+                       color=INK if cur is not None else MUTED, ha="center", va="center")
     path = f"{prefix}_1.png"
     p.footer("Средняя позиция в поиске и каталоге Ozon за день: чем меньше число, тем выше товар.\n"
-             f"Пропуск на графике — товар не показывался. Показы за 28 дней: {num(c['views'])}. Источник: Ozon Seller API.")
+             "Зелёный — поднялся к предыдущему дню, красный — опустился, серый — изменение меньше 5%. "
+             "Источник: Ozon Seller API.")
     p.save(path)
     return [path]
