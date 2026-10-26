@@ -13,8 +13,9 @@ class OzonClient:
             base_url=BASE,
             timeout=60,
             headers={
-                "Client-Id": client_id or os.environ["OZON_CLIENT_ID"],
-                "Api-Key": api_key or os.environ["OZON_API_KEY"],
+                "Client-Id": client_id or os.environ.get("OZON_BOT_CLIENT_ID") or os.environ["OZON_CLIENT_ID"],
+                # у бота свой ключ (OZON_BOT_API_KEY), чтобы не делить его с другими интеграциями; нет — общий
+                "Api-Key": api_key or os.environ.get("OZON_BOT_API_KEY") or os.environ["OZON_API_KEY"],
             },
         )
 
