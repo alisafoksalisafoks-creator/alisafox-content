@@ -1,5 +1,6 @@
 """Сбор снимка данных для расчёта. Отправления FBO кешируются по дням: Ozon отдаёт по 100 штук за запрос."""
 import json
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from . import config, profit
@@ -37,8 +38,11 @@ def postings(oz, today, days=config.REF_DAYS, log=print):
 
 
 def load_season():
-    """season.tsv: категория \\t коэф. января … декабря. Нет файла — коэффициент 1."""
+    """season.tsv: категория \\t коэф. января … декабря. Сначала файл на сервере (DATA_DIR), затем — из кода.
+    Нет файла — коэффициент 1."""
     path = config.DATA_DIR / "season.tsv"
+    if not path.exists():
+        path = Path(__file__).with_name("season.tsv")
     out = {}
     if not path.exists():
         return out
