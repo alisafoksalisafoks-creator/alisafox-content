@@ -21,8 +21,11 @@ if [ ! -f .env ]; then
   ask() { local v; if [ "$3" = 1 ]; then read -rsp "$2: " v </dev/tty; echo; else read -rp "$2: " v </dev/tty; fi; echo "$1=$v" >> .env; }
   ask TELEGRAM_BOT_TOKEN "Токен БОТ_секретаря из BotFather (НЕ токен «Аналитика»)" 1
   ask TELEGRAM_CHAT_ID "Ваш Telegram ID (владелец)" 0
-  # ключи Ozon и МоегоСклада — те же, что у «Аналитика»: берём из его .env, чтобы не вводить заново
-  for k in OZON_BOT_CLIENT_ID OZON_BOT_API_KEY OZON_CLIENT_ID OZON_API_KEY OZON_PERF_CLIENT_ID OZON_PERF_CLIENT_SECRET MOYSKLAD_TOKEN; do
+  # свой ключ Ozon секретаря (только чтение), чтобы не делить лимиты с «Аналитиком»
+  ask OZON_BOT_CLIENT_ID "Ozon Client ID для секретаря" 0
+  ask OZON_BOT_API_KEY "Ozon API-ключ секретаря (только чтение)" 1
+  # остальное (общий ключ Ozon на запас, Performance, МойСклад) — из .env «Аналитика», чтобы не вводить заново
+  for k in OZON_CLIENT_ID OZON_API_KEY OZON_PERF_CLIENT_ID OZON_PERF_CLIENT_SECRET MOYSKLAD_TOKEN; do
     grep -h "^$k=" /opt/alisafox-content/.env >> .env 2>/dev/null || true
   done
   ask HEALTHCHECK_URL "Ссылка Healthchecks.io (можно пропустить — Enter)" 0
@@ -37,5 +40,6 @@ systemctl daemon-reload
 systemctl enable --now secretary-bot
 systemctl restart secretary-bot
 echo
-echo "Готово. БОТ_секретарь запущен. Первый запуск 10–20 минут: скачивает историю Ozon за 9 недель."
+echo "Готово. БОТ_секретарь запущен. Откройте его в Telegram и нажмите /start."
+echo "Первое нажатие кнопки займёт 2–5 минут: бот копирует историю у «Аналитика» и докачивает рекламу и прибыль."
 echo "Журнал: journalctl -u secretary-bot -f   (выйти: Ctrl+C)"
