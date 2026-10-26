@@ -436,3 +436,85 @@ def morning_png(m, prefix):
 def service_label_short(name):
     from bot.morning import service_label
     return short(service_label(name), 44)
+
+
+POS_COLOR = {"up": GOOD, "down": BAD, "flat": MUTED, "none": MUTED}
+POS_NOTE = ("Средняя позиция в поиске и каталоге Ozon за день: чем меньше число, тем выше товар.\n"
+            "▲ поднялся · ▼ опустился на столько мест · ≈ изменение меньше 5%. Источник: Ozon Seller API.")
+
+
+def _pos(p):
+    return "—" if p is None else num(p)
+
+
+def positions_list_png(title, subtitle, rows, move, prefix):
+    """Список артикулов: позиция за день, ▲▼ к предыдущему дню и к неделе назад."""
+    cols = [(0.05, "Товар", "left"), (0.52, "позиция", "right"), (0.73, "к пред. дню", "right"),
+            (0.95, "к неделе", "right")]
+    out = []
+    for r in rows:
+        l1, k1 = move(r["pos"], r["prev"])
+        l7, k7 = move(r["pos"], r["week"])
+        out.append(([(r["offer_id"] or r["sku"], INK, True), (_pos(r["pos"]), INK, True),
+                     (l1, POS_COLOR[k1], True), (l7, POS_COLOR[k7], False)], short(r.get("name") or "", 64)))
+    return _sheets(title, subtitle, "Средняя позиция и движение", cols, out, "● нет данных о позициях", prefix,
+                   POS_NOTE, per_sheet=16, max_sheets=4)
+
+
+def position_png(title, subtitle, c, move, prefix):
+    """Артикул: плитки и график средней позиции по дням за 28 дней (ось перевёрнута: выше — лучше)."""
+    p = Page(0.35 + 0.78 + 2 * 1.0 + 3.0 + 0.85, SHEET_W)
+    p.header(short(title, 30), subtitle)
+    l1, k1 = move(c["cur"], c["prev"])
+    l7, k7 = move(c["cur"], c["week"])
+    la, ka = move(c["avg"], c["avg_prev"])
+    tiles = [("Позиция за день", c["cur"], l1 + " к пред. дню", k1), ("Неделю назад", c["week"], l7 + " с тех пор", k7),
+             ("Средняя за 28 дн", c["avg"], la + " к пред. 28", ka),
+             ("Лучшая за 28 дн", c["best"][1] if c["best"] else None,
+              f"{c['best'][0]:%d.%m}" if c["best"] else "", "none")]
+    gx, th, w = 0.02, 0.85, (0.9 - 0.02) / 2
+    for row in range(0, 4, 2):
+        p.y -= th
+        for i, (name, v, lab, kind) in enumerate(tiles[row:row + 2]):
+            ax = p.fig.add_axes([0.05 + i * (w + gx), p.y / p.h, w, th / p.h])
+            ax.set_facecolor(TILE)
+            ax.set_xticks([]), ax.set_yticks([])
+            for s in ax.spines.values():
+                s.set_visible(False)
+            ax.text(0.06, 0.76, name, fontsize=8.5, color=INK2, transform=ax.transAxes, va="center")
+            ax.text(0.06, 0.34, _pos(v), fontsize=15, fontweight="bold", color=INK, transform=ax.transAxes, va="center")
+            ax.text(0.94, 0.34, lab, fontsize=9.5, fontweight="bold", color=POS_COLOR[kind] if kind != "none" else MUTED,
+                    transform=ax.transAxes, va="center", ha="right")
+        p.y -= 0.15
+    p.text(0.05, 0.35, "Средняя позиция по дням", fontsize=11, fontweight="bold", color=INK)
+    p.y -= 0.32
+    ax = p.box(0.1, 2.0, 0.85)
+    p.y -= 0.35
+    s = c["series"]
+    xs = [i for i, (_, v, _) in enumerate(s) if v is not None]
+    ys = [s[i][1] for i in xs]
+    if ys:
+        ax.plot(xs, ys, color=BLUE, lw=2, marker="o", ms=2.5)
+        ax.scatter([xs[-1]], [ys[-1]], s=28, color=BLUE, zorder=3, edgecolor=SURFACE, linewidth=1.5)
+        ax.annotate(_pos(ys[-1]), (xs[-1], ys[-1]), xytext=(6, 0), textcoords="offset points", fontsize=9,
+                    color=INK, va="center")
+        lo, hi = min(ys), max(ys)
+        pad = max(1, (hi - lo) * 0.12)
+        ax.set_ylim(hi + pad, max(0, lo - pad))  # перевёрнутая ось: 1-е место сверху
+    else:
+        ax.text(0.5, 0.5, "нет данных за 28 дней", ha="center", va="center", color=MUTED, transform=ax.transAxes)
+    step = max(1, len(s) // 4)
+    ticks = sorted(set(list(range(0, len(s), step))[:4] + [len(s) - 1]))
+    ax.set_xticks(ticks, [f"{s[i][0]:%d.%m}" for i in ticks], fontsize=8.5, color=INK2)
+    ax.set_xlim(-0.5, len(s) - 0.5)
+    ax.tick_params(axis="y", labelsize=8.5, colors=INK2, length=0)
+    ax.tick_params(axis="x", length=0)
+    ax.grid(axis="y", color=GRID, lw=0.8)
+    ax.set_facecolor(SURFACE)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(GRID)
+    path = f"{prefix}_1.png"
+    p.footer(POS_NOTE + f"\nПоказы за 28 дней: {num(c['views'])}. Пропуск на графике — товар не показывался.")
+    p.save(path)
+    return [path]

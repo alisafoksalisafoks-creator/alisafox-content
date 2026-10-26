@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from bot.sources.ozon import OzonClient
 
 METRICS = ("ordered_units", "revenue", "hits_view", "hits_view_pdp", "hits_tocart",
-           "cancellations", "delivered_units", "returns")
+           "cancellations", "delivered_units", "returns", "position_category")
 DB_PATH = os.environ.get("BOT_DB", os.path.join(os.path.dirname(__file__), "data.sqlite"))
 FIRST_LOAD_DAYS = 120
 REFRESH_DAYS = 5
@@ -29,6 +29,10 @@ def connect(path=DB_PATH):
         create index if not exists daily_type on daily (type_id, day);
         create index if not exists daily_day on daily (day);
     """)
+    cols = {r[1] for r in db.execute("pragma table_info(daily)")}
+    for m in METRICS:  # новая метрика в старой базе — колонка добавится, история догрузится в refresh
+        if m not in cols:
+            db.execute(f"alter table daily add column {m} real")
     return db
 
 
@@ -40,6 +44,8 @@ def last_day(db):
 def refresh(db, until: date, oz: OzonClient | None = None):
     oz = oz or OzonClient()
     have = last_day(db)
+    if have and not db.execute("select 1 from daily where position_category > 0 limit 1").fetchone():
+        have = None  # средней позиции ещё нет в истории — перекачиваем всё один раз
     start = until - timedelta(days=FIRST_LOAD_DAYS - 1) if not have else min(have, until) - timedelta(days=REFRESH_DAYS - 1)
     # кусками по 30 дней, чтобы не упираться в размер ответа
     d = start

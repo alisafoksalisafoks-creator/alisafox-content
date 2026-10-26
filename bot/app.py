@@ -22,7 +22,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
                            Message)
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from bot import cards, dashboard, morning, profit, restock, signals, store
+from bot import cards, dashboard, morning, positions, profit, restock, signals, store
 from bot.category_report import MSK
 from bot.sources import gsheet_costs
 from bot.sources.moysklad import Catalog, is_test
@@ -59,10 +59,12 @@ def kb(rows):
 
 MENU = kb([[("📊 Сводка за вчера", "morning")],
            [("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
-           [("🚦 Сигналы по остаткам", "sig")],
+           [("🚦 Сигналы по остаткам", "sig"), ("📍 Позиции", "pos")],
            [("📉 Минусовые артикулы", "neg")]])
 SIGNALS_MENU = kb([[("⏰ Пора отгрузить", "sig:s")], [("🔀 Пересорт", "sig:x")],
                    [("💸 Платное хранение", "sig:p")], [("🔎 По артикулу", "sig:a")], [("⬅️ Меню", "menu")]])
+POS_MENU = kb([[("⭐ Новинки (Супер)", "pos:n")], [("📦 По категории", "pos:c")], [("🔎 Ввести артикул", "pos:a")],
+               [("⬅️ Меню", "menu")]])
 
 
 def period_kb(target, kind):
@@ -396,9 +398,117 @@ async def on_button(cb: CallbackQuery):
     elif d.startswith("p:"):
         _, t, key, kind = d.split(":")
         await card(msg, f"{t}:{key}", kind)
+    elif d == "pos" or d.startswith("pos:"):
+        await pos_button(msg, cb.from_user.id, d)
     elif d.startswith("r:"):
         t, key = d[2:].split(":", 1)
         await (category_signals(msg, key) if t == "c" else signal_sku(msg, key))
+
+
+async def pos_day(msg: Message):
+    """Последний день с данными: позиция приходит вместе с продажами в store.daily."""
+    return data_day()
+
+
+async def pos_items(msg: Message, target):
+    """target: n — новинки (Супер), c<type_id> — категория, s<sku> — один артикул. → (название, артикулы)."""
+    if target == "n":
+        return "Новинки (Супер)", await asyncio.to_thread(positions.super_skus, oz)
+    if target.startswith("c"):
+        tid = target[1:]
+        row = db.execute("select type_name from sku where type_id = ? limit 1", (tid,)).fetchone()
+        rows = store.top_skus(db, data_day() - timedelta(days=29), data_day(), tid, 50)
+        items = [{"sku": r["sku"], "offer_id": r["offer_id"], "name": r["name"]} for r in rows
+                 if not is_test(r["offer_id"])][:40]
+        return (row[0] if row else "Категория"), items
+    s = store.find_sku(db, target[1:])
+    return (s["offer_id"] or s["sku"]) if s else target[1:], [dict(s)] if s else [{"sku": target[1:]}]
+
+
+def excel_kb(target):
+    return [("📥 Excel 7 дн", f"pos:x:{target}:7"), ("28 дн", f"pos:x:{target}:28"),
+            ("свой период", f"pos:x:{target}:p")]
+
+
+async def pos_list(msg: Message, target):
+    day = await pos_day(msg)
+    title, items = await pos_items(msg, target)
+    if not items:
+        return await msg.answer("Здесь нет артикулов.", reply_markup=POS_MENU)
+    rows = await asyncio.to_thread(positions.summary, db, items, day)
+    sub = f"Ozon · {day:%d.%m.%Y} · {len(rows)} SKU · сначала упавшие"
+    await send_png(msg, lambda p: dashboard.positions_list_png(dashboard.short(title, 30), sub, rows, positions.move, p),
+                   f"Позиции: {title} за {day:%d.%m.%Y}")
+    back = ("⬅️ Категории", "pos:c") if target.startswith("c") else ("⬅️ Позиции", "pos")
+    await msg.answer("Нажмите на артикул — покажу позицию по дням за 28 дней:", reply_markup=kb(
+        [[(f"{(r['offer_id'] or r['sku'])[:20]} · {dashboard._pos(r['pos'])} {positions.move(r['pos'], r['prev'])[0]}",
+           f"pos:s:{r['sku']}")] for r in rows[:60]]
+        + [excel_kb(target), [("🔎 Ввести артикул", "pos:a"), back]]))
+
+
+async def pos_sku(msg: Message, sku):
+    day = await pos_day(msg)
+    s = store.find_sku(db, sku)
+    name = (s["offer_id"] or s["sku"]) if s else sku
+    c = positions.sku_card(db, sku, day)
+    sub = f"Ozon · {dashboard.short(s['name'], 40) if s else sku} · 28 дн по {day:%d.%m}"
+    lab = positions.move(c["cur"], c["prev"])[0]
+    await send_png(msg, lambda p: dashboard.position_png(name, sub, c, positions.move, p),
+                   f"{name}: позиция {dashboard._pos(c['cur'])} за {day:%d.%m} ({lab} к пред. дню)",
+                   kb([excel_kb(f"s{sku}"), [("⭐ Новинки", "pos:n"), ("⬅️ Позиции", "pos")]]))
+
+
+def parse_period(text, last):
+    """«01.10-20.10» → (start, end); год — текущий, будущие даты — прошлого года."""
+    m = re.match(r"\s*(\d\d?\.\d\d)(?:\.\d{2,4})?\s*[-–—]\s*(\d\d?\.\d\d)", text or "")
+    if not m:
+        return None
+
+    def d(x):
+        dd = datetime.strptime(f"{x}.{last.year}", "%d.%m.%Y").date()
+        return dd if dd <= last else dd.replace(year=last.year - 1)
+
+    a, b = d(m.group(1)), d(m.group(2))
+    return (a, min(b, last)) if a <= b else None
+
+
+async def pos_excel(msg: Message, target, start, end):
+    title, items = await pos_items(msg, target)
+    tmp = tempfile.mkdtemp()
+    try:
+        name = re.sub(r"[^\w.-]+", "_", f"Позиции_{title}_{start:%d.%m}-{end:%d.%m}.xlsx")
+        path = await asyncio.to_thread(positions.excel, db, items, start, end, os.path.join(tmp, name))
+        await msg.answer_document(FSInputFile(path, filename=name),
+                                  caption=f"Позиции Ozon: {title}, {start:%d.%m}–{end:%d.%m}, {len(items)} SKU")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+async def pos_button(msg: Message, user, d):
+    if d == "pos":
+        await msg.answer("Средняя позиция артикула в поиске и каталоге Ozon по дням. Что смотрим?", reply_markup=POS_MENU)
+    elif d == "pos:n":
+        await msg.answer("Собираю новинки со статусом «Супер»…")
+        await pos_list(msg, "n")
+    elif d == "pos:c":
+        rows = store.categories(db, data_day() - timedelta(days=29))[:24]
+        buttons = [(r["type_name"][:30], f"pos:c:{r['type_id']}") for r in rows]
+        await msg.answer("Категории по выручке за 30 дней:", reply_markup=kb(
+            [buttons[i:i + 2] for i in range(0, len(buttons), 2)] + [[("🔎 Ввести артикул", "pos:a"), ("⬅️ Позиции", "pos")]]))
+    elif d.startswith("pos:c:"):
+        await pos_list(msg, "c" + d[6:])
+    elif d == "pos:a":
+        waiting[user] = "pos"
+        await msg.answer("Пришлите артикул (например OZ353NEW2) или SKU Ozon.")
+    elif d.startswith("pos:s:"):
+        await pos_sku(msg, d[6:])
+    elif d.startswith("pos:x:"):
+        target, n = d[6:].rsplit(":", 1)
+        if n == "p":
+            waiting[user] = f"posx:{target}"
+            return await msg.answer("Пришлите период, например 01.10-25.10")
+        end = await pos_day(msg)
+        await pos_excel(msg, target, end - timedelta(days=int(n) - 1), end)
 
 
 async def users_button(msg: Message, admin, d):
@@ -443,11 +553,22 @@ async def on_text(msg: Message):
         add_user(uid, name)
         await msg.answer(f"Добавлен: {name}. Пусть нажмёт /start в боте.", reply_markup=users_kb())
         return
+    mode = waiting.get(msg.from_user.id, "")
+    if mode.startswith("posx:"):
+        last = await pos_day(msg)
+        period = parse_period(msg.text, last)
+        if not period:
+            return await msg.answer(f"Не понял период. Формат: 01.10-25.10 (данные есть по {last:%d.%m}).")
+        waiting.pop(msg.from_user.id)
+        return await pos_excel(msg, mode[5:], *period)
     s = store.find_sku(db, msg.text)
     if not s:
         return await msg.answer("Не нашёл такой артикул в продажах за 120 дней. Проверьте код.", reply_markup=MENU)
-    if waiting.pop(msg.from_user.id, "card") == "signals":
+    mode = waiting.pop(msg.from_user.id, "card")
+    if mode == "signals":
         return await signal_sku(msg, s["sku"])
+    if mode == "pos":
+        return await pos_sku(msg, s["sku"])
     await card(msg, f"s:{s['sku']}", "week")
 
 
