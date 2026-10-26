@@ -34,6 +34,8 @@ ADMINS = {int(x) for x in os.environ.get("TELEGRAM_CHAT_ID", "").replace(" ", ""
 REFRESH_HOUR = 6  # обновление истории каждое утро в 6:00 МСК
 KEYWORDS_HOUR = 3  # ночная загрузка запросов и рекламных фраз для «Ключей»
 MORNING_HOUR = 9  # утренняя сводка в 9:00 МСК
+# BOT_MODE=search — отдельный бот «Позиции и ключи»: свой токен, своя база, в меню только эти две кнопки
+SEARCH = os.environ.get("BOT_MODE") == "search"
 
 dp = Dispatcher()
 db = store.connect()
@@ -58,11 +60,11 @@ def kb(rows):
                                                  for r in rows])
 
 
-MENU = kb([[("📊 Сводка за вчера", "morning")],
-           [("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
-           [("🚦 Сигналы по остаткам", "sig")],
-           [("📍 Позиции", "pos"), ("🔑 Ключи", "kw")],
-           [("📉 Минусовые артикулы", "neg")]])
+MENU = (kb([[("📍 Позиции", "pos")], [("🔑 Ключи", "kw")]]) if SEARCH else
+        kb([[("📊 Сводка за вчера", "morning")],
+            [("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
+            [("🚦 Сигналы по остаткам", "sig")],
+            [("📉 Минусовые артикулы", "neg")]]))
 KW_MENU = kb([[("📂 Категория", "kw:c"), ("🔎 Артикул", "kw:a")], [("⬅️ Меню", "menu")]])
 SIGNALS_MENU = kb([[("⏰ Пора отгрузить", "sig:s")], [("🔀 Пересорт", "sig:x")],
                    [("💸 Платное хранение", "sig:p")], [("🔎 По артикулу", "sig:a")], [("⬅️ Меню", "menu")]])
@@ -720,7 +722,7 @@ async def on_text(msg: Message):
     s = store.find_sku(db, msg.text)
     if not s:
         return await msg.answer("Не нашёл такой артикул в продажах за 120 дней. Проверьте код.", reply_markup=MENU)
-    mode = waiting.pop(msg.from_user.id, "card")
+    mode = waiting.pop(msg.from_user.id, "pos" if SEARCH else "card")
     if mode == "signals":
         return await signal_sku(msg, s["sku"])
     if mode == "pos":
@@ -732,11 +734,12 @@ async def on_text(msg: Message):
 
 
 def refresh_data():
-    try:
-        log.info("себестоимость из таблицы: %s", gsheet_costs.refresh())
-    except Exception:
-        log.exception("таблица себестоимости не прочиталась, работаю со старым файлом")
-    store.refresh(db, yesterday(), oz)
+    if not SEARCH:  # себестоимость нужна только боту аналитики
+        try:
+            log.info("себестоимость из таблицы: %s", gsheet_costs.refresh())
+        except Exception:
+            log.exception("таблица себестоимости не прочиталась, работаю со старым файлом")
+    store.refresh(db, yesterday(), oz, need_positions=SEARCH)
     store.set_offer_ids(db, oz.stocks())
     log.info("данные обновлены по %s", store.last_day(db))
 
@@ -750,7 +753,7 @@ async def scheduler(bot: Bot):
     while True:
         now = datetime.now(MSK)
         today = str(now.date())
-        if now.hour >= MORNING_HOUR and not db.execute("select 1 from sent where day = ?", (today,)).fetchone():
+        if not SEARCH and now.hour >= MORNING_HOUR and not db.execute("select 1 from sent where day = ?", (today,)).fetchone():
             try:
                 if (store.last_day(db) or date.min) < yesterday():
                     await asyncio.to_thread(refresh_data)
@@ -764,7 +767,7 @@ async def scheduler(bot: Bot):
                 await asyncio.to_thread(refresh_data)
             except Exception:
                 log.exception("обновление не удалось")
-        if now.hour >= KEYWORDS_HOUR and not db.execute("select 1 from kw_loaded where day = ?", (today,)).fetchone():
+        if SEARCH and now.hour >= KEYWORDS_HOUR and not db.execute("select 1 from kw_loaded where day = ?", (today,)).fetchone():
             try:
                 await asyncio.to_thread(kw_prefetch)
                 db.execute("insert into kw_loaded values (?)", (today,))
@@ -782,7 +785,7 @@ async def scheduler(bot: Bot):
 
 async def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if store.last_day(db) is None or store.no_positions(db):
+    if store.last_day(db) is None or SEARCH and store.no_positions(db):
         log.info("загрузка истории за %s дней (продажи и позиции), это займёт 10–20 минут", store.FIRST_LOAD_DAYS)
         await asyncio.to_thread(refresh_data)
     session = AiohttpSession()

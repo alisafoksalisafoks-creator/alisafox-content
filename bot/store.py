@@ -45,9 +45,10 @@ def no_positions(db):
     return not db.execute("select 1 from daily where position_category > 0 limit 1").fetchone()
 
 
-def refresh(db, until: date, oz: OzonClient | None = None):
+def refresh(db, until: date, oz: OzonClient | None = None, need_positions=False):
     oz = oz or OzonClient()
-    have = None if no_positions(db) else last_day(db)  # средней позиции ещё нет — перекачиваем всё один раз
+    have = None if need_positions and no_positions(db) else last_day(db)  # позиций ещё нет — перекачиваем всё
+
     start = until - timedelta(days=FIRST_LOAD_DAYS - 1) if not have else min(have, until) - timedelta(days=REFRESH_DAYS - 1)
     # кусками по 30 дней, чтобы не упираться в размер ответа
     d = start
