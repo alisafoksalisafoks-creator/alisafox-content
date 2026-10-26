@@ -151,7 +151,7 @@ def for_sku(db, perf, sku, start: date, end: date, today: date):
     phrases = db.execute(
         f"select query, sum(views) views, sum(clicks) clicks from ad_phrases "
         f"where start = ? and end = ? and sku = ? and campaign in ({tmarks}) group by lower(query) "
-        f"order by views desc", (*key, sku, *top)).fetchall()
+        f"order by clicks desc, views desc", (*key, sku, *top)).fetchall()
     return {"campaigns": camps, "totals": dict(tot), "phrases": [dict(p) for p in phrases]}
 
 
