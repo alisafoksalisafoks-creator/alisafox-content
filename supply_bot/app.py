@@ -4,6 +4,7 @@
 Запуск: python -m supply_bot.app (переменные — в env.example).
 """
 import asyncio
+import re
 import json
 import logging
 import os
@@ -248,8 +249,14 @@ async def on_button(c: CallbackQuery):
     elif d.startswith("whs:"):
         await m.answer("Выберите направление:", reply_markup=wh_keyboard(plan, int(d[4:]), "wh"))
     elif d.startswith("wh:"):
-        await send(m, render.warehouse(plan, _wh_by_index(plan, int(d[3:]))),
-                   kb([[("🏬 Другое направление", "whs:0"), ("⬅️ Меню FBO", "fbo")]]))
+        name = _wh_by_index(plan, int(d[3:]))
+        rows = [[("🏬 Другое направление", "whs:0"), ("⬅️ Меню FBO", "fbo")]]
+        if any(x.warehouse == name and x.qty > 0 for x in plan.lines):
+            rows.insert(0, [("✅ Всё верно, скачать файл направления", f"whf:{d[3:]}")])
+        await send(m, render.warehouse(plan, name), kb(rows))
+    elif d.startswith("whf:"):
+        await m.answer("Формирую файл направления…")
+        await send_direction_file(m, plan, _wh_by_index(plan, int(d[4:])))
     elif d == "empty":
         await send(m, render.empty_clusters(plan), FBO)
     elif d == "decide":
@@ -386,6 +393,14 @@ async def send_file(m, plan):
     path = Path(tempfile.gettempdir()) / f"Поставка_FBO_{plan.ship_date:%d.%m}.xlsx"
     await asyncio.to_thread(excel.build, plan, path, S.snap.taken_at)
     await m.answer_document(FSInputFile(path), caption=f"Лист распределения FBO на {plan.ship_date:%d.%m}. "
+                                                       f"Данные на {S.snap.taken_at}.")
+
+
+async def send_direction_file(m, plan, name):
+    safe = re.sub(r"[^\w\- ]+", "", name).strip().replace(" ", "_") or "направление"
+    path = Path(tempfile.gettempdir()) / f"Поставка_{safe}_{plan.ship_date:%d.%m}.xlsx"
+    await asyncio.to_thread(excel.build_direction, plan, name, path, S.snap.taken_at)
+    await m.answer_document(FSInputFile(path), caption=f"{name}: распределение на {plan.ship_date:%d.%m}. "
                                                        f"Данные на {S.snap.taken_at}.")
 
 

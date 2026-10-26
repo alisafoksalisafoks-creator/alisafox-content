@@ -1,6 +1,8 @@
 """Тексты для Telegram (HTML). Каждое сообщение — не длиннее лимита Telegram."""
 from html import escape
 
+from . import config
+
 from .sources.sheets import norm, root_of
 
 LIMIT = 3800
@@ -71,13 +73,20 @@ def warehouse(plan, name):
     where = items[0].cluster if items[0].cluster != name else "кластер"
     ship = f"склад приёмки: {escape(items[0].ship_to)}" if items[0].ship_to else ""
     head = [f"<b>{escape(name)}</b> · {escape(where)}" + (f"\n{ship} (подсказка)" if ship else ""),
-            f"{fmt(sum(x.qty for x in items))} шт, {sum(x.box_count for x in items)} коробов, отгрузка {plan.ship_date:%d.%m}", ""]
+            f"{fmt(sum(x.qty for x in items))} шт, {sum(x.box_count for x in items)} коробов, отгрузка {plan.ship_date:%d.%m}",
+            "",
+            "<b>Как считаю</b>: скорость = отгрузки кластера за 14 дн ÷ 14 × сезон. "
+            f"Потребность = скорость × (срок L + {config.TARGET_DAYS}) − (доступно + в пути на Ozon). "
+            "Везём потребность в пределах нашего склада, целыми коробами.", ""]
     rows = []
     for ln in sorted(items, key=lambda x: (-["обычно", "наверх", "срочно"].index(x.priority), -x.qty)):
         days = f"{ln.days:.0f} дн" if ln.days is not None else "—"
         flag = (" · " + escape("; ".join(ln.flags))) if ln.flags else ""
         rows.append(f"{ICON[ln.priority]} <code>{escape(ln.offer)}</code> — <b>{fmt(ln.qty)}</b> шт ({_boxes(ln)}) · "
-                    f"{ln.speed:.1f}/дн, запас {days}{flag}")
+                    f"{ln.speed:.1f}/дн, запас {days}{flag}\n"
+                    f"   {ln.sales14} шт за 14 дн → {ln.speed:.1f}/дн × ({ln.lead}+{config.TARGET_DAYS}) − "
+                    f"{fmt(ln.have)} на Ozon = {fmt(ln.need)} → везём {fmt(ln.qty)}"
+                    + ("" if ln.qty == ln.need else " (целые короба, в пределах нашего склада)"))
     return chunks(head + rows)
 
 

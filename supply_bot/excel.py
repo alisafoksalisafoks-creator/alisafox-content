@@ -28,15 +28,13 @@ def _boxes(ln):
     return ", ".join(f"{k}×{s} шт ({name})" for name, s, k in ln.boxes) or "—"
 
 
-def build(plan, path, snap_time=""):
-    wb = Workbook()
-    wb.remove(wb.active)
-
+def _distribution(wb, plan, groups):
+    """Лист распределения: {направление: [строки]} — по коробам, итог по каждому направлению."""
     ws = _sheet(wb, "Лист распределения",
                 ["Направление", "Кластер", "Склад приёмки", "Артикул", "Кол-во, шт", "Короб", "Шт в коробе", "Коробов",
                  "Дата отгрузки", "Приоритет", "Пометки"],
                 [], [30, 26, 28, 28, 11, 14, 11, 9, 13, 11, 50])
-    for wh, lines in plan.by_warehouse().items():
+    for wh, lines in groups.items():
         for ln in sorted(lines, key=lambda x: (-["обычно", "наверх", "срочно"].index(x.priority), -x.qty)):
             if ln.boxes:
                 for name, s, k in ln.boxes:
@@ -52,14 +50,44 @@ def build(plan, path, snap_time=""):
     for c in ws["I"][1:]:
         c.number_format = "DD.MM.YYYY"
 
-    _sheet(wb, "Потребность по направлениям",
+
+def _need(wb, lines, title="Потребность по направлениям"):
+    """Весь расчёт по строкам: из чего получилась потребность и сколько везём."""
+    _sheet(wb, title,
            ["Направление", "Кластер", "Артикул", "Отгрузки 14 дн", "Отгрузки 30 дн", "Коэф. сезона", "Скорость, шт/дн",
             "Доступно", "В пути", "Дней запаса", "Срок L, дн", "Потребность", "К отправке", "Коробов",
             "Короба", "Приоритет", "Пометки"],
            [[ln.warehouse, ln.cluster, ln.offer, ln.sales14, ln.sales30, ln.season, round(ln.speed, 2),
              ln.available, ln.transit, round(ln.days, 1) if ln.days is not None else None, ln.lead, ln.need,
-             ln.qty, ln.box_count, _boxes(ln), ln.priority, "; ".join(ln.flags)] for ln in plan.lines],
+             ln.qty, ln.box_count, _boxes(ln), ln.priority, "; ".join(ln.flags)] for ln in lines],
            [28, 24, 26, 9, 9, 8, 9, 9, 8, 9, 8, 10, 10, 8, 34, 10, 44])
+
+
+def build_direction(plan, name, path, snap_time=""):
+    """Файл одного направления: лист распределения и как посчитано — после «Всё верно» на экране направления."""
+    wb = Workbook()
+    wb.remove(wb.active)
+    lines = [x for x in plan.lines if x.warehouse == name and x.qty > 0]
+    _distribution(wb, plan, {name: lines})
+    _need(wb, lines, "Как посчитано")
+    _sheet(wb, "Параметры", ["Параметр", "Значение"], [
+        ["Направление", name],
+        ["Снимок данных", snap_time],
+        ["Дата отгрузки", plan.ship_date.strftime("%d.%m.%Y")],
+        ["Спрос", f"отгрузки FBO из кластера за {config.SALES_DAYS} дн без отмен ÷ {config.SALES_DAYS} × коэф. сезона"],
+        ["Потребность", f"скорость × (срок L + {config.TARGET_DAYS}) − (доступно + в пути)"],
+        ["К отправке", "потребность в пределах свободного остатка нашего склада, целыми моно-коробами"],
+    ], [24, 90])
+    wb.save(path)
+    return path
+
+
+def build(plan, path, snap_time=""):
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    _distribution(wb, plan, plan.by_warehouse())
+    _need(wb, plan.lines)
 
     _sheet(wb, "Пустые кластеры",
            ["Кластер", "Артикул", "Продажи 14 дн (весь Ozon)", "Рекомендуемый склад", "Свободно у нас"],
