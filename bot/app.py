@@ -22,7 +22,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
                            Message)
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from bot import cards, dashboard, morning, positions, profit, restock, signals, store
+from bot import cards, dashboard, keywords, morning, positions, profit, restock, signals, store
 from bot.category_report import MSK
 from bot.sources import gsheet_costs
 from bot.sources.moysklad import Catalog, is_test
@@ -32,6 +32,7 @@ from bot.sources.performance import PerformanceClient
 log = logging.getLogger("bot")
 ADMINS = {int(x) for x in os.environ.get("TELEGRAM_CHAT_ID", "").replace(" ", "").split(",") if x}  # владелец
 REFRESH_HOUR = 6  # обновление истории каждое утро в 6:00 МСК
+KEYWORDS_HOUR = 3  # ночная загрузка запросов и рекламных фраз для «Ключей»
 MORNING_HOUR = 9  # утренняя сводка в 9:00 МСК
 
 dp = Dispatcher()
@@ -59,8 +60,10 @@ def kb(rows):
 
 MENU = kb([[("📊 Сводка за вчера", "morning")],
            [("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
-           [("🚦 Сигналы по остаткам", "sig"), ("📍 Позиции", "pos")],
+           [("🚦 Сигналы по остаткам", "sig")],
+           [("📍 Позиции", "pos"), ("🔑 Ключи", "kw")],
            [("📉 Минусовые артикулы", "neg")]])
+KW_MENU = kb([[("📂 Категория", "kw:c"), ("🔎 Артикул", "kw:a")], [("⬅️ Меню", "menu")]])
 SIGNALS_MENU = kb([[("⏰ Пора отгрузить", "sig:s")], [("🔀 Пересорт", "sig:x")],
                    [("💸 Платное хранение", "sig:p")], [("🔎 По артикулу", "sig:a")], [("⬅️ Меню", "menu")]])
 POS_MENU = kb([[("⭐ Новинки (Супер)", "pos:n")], [("📦 По категории", "pos:c")], [("🔎 Ввести артикул", "pos:a")],
@@ -307,6 +310,128 @@ async def losses_category(msg: Message, type_id):
          for x in c["items"][:40]] + [[("⬅️ Категории", "neg"), ("⬅️ Меню", "menu")]]))
 
 
+def kw_categories(action):
+    rows = store.categories(db, data_day() - timedelta(days=27))[:30]
+    buttons = [(r["type_name"][:30], f"kw:{action}:{r['type_id']}") for r in rows]
+    extra = [[("✏️ Ввести артикул вручную", "kw:m")]] if action == "al" else []
+    return kb([buttons[i:i + 2] for i in range(0, len(buttons), 2)] + extra + [[("⬅️ Ключи", "kw")]])
+
+
+def kw_days_kb(target, back):
+    return kb([[(f"{n} дней", f"kw:{target}:{n}") for n in keywords.DAYS], [back, ("⬅️ Меню", "menu")]])
+
+
+def kw_sku_back(sku):
+    row = db.execute("select type_id from sku where sku = ?", (str(sku),)).fetchone()
+    return ("⬅️ Артикулы категории", f"kw:al:{row[0]}") if row and row[0] else ("⬅️ Ключи", "kw")
+
+
+async def kw_articles(msg: Message, type_id):
+    end = data_day()
+    items = [r for r in store.top_skus(db, end - timedelta(days=27), end, type_id, 60) if not is_test(r["offer_id"])][:40]
+    name = db.execute("select type_name from sku where type_id = ? limit 1", (type_id,)).fetchone()[0]
+    rows = [[(f"{(r['offer_id'] or r['sku'])[:16]} · {dashboard.short(r['name'] or '', 18)}", f"kw:sd:{r['sku']}")]
+            for r in items]
+    await msg.answer(f"{name}: артикулы по выручке за 28 дней. Выберите или введите вручную:", reply_markup=kb(
+        rows + [[("✏️ Ввести вручную", "kw:m")], [("⬅️ Категории", "kw:a"), ("⬅️ Меню", "menu")]]))
+
+
+_perf = None
+
+
+def perf():
+    global _perf
+    _perf = _perf or PerformanceClient()
+    return _perf
+
+
+def kw_build(kind, key, days):
+    today = datetime.now(MSK).date()
+    end = keywords.ready_day(oz, db, today)
+    if kind == "s":
+        return keywords.article(db, oz, perf(), key, end, days, today)
+    return keywords.category(db, oz, key, end, days, today)
+
+
+async def kw_show(msg: Message, kind, key, days):
+    await msg.answer("Собираю запросы и рекламу. Если ночью данные не подгрузились, это 1–2 минуты…")
+    try:
+        data = await asyncio.to_thread(kw_build, kind, key, days)
+    except Exception:
+        log.exception("ключи не собрались")
+        return await msg.answer("Не получилось собрать запросы: Ozon не ответил. Попробуйте через пару минут.",
+                                reply_markup=KW_MENU)
+    other = [(f"{n} дней", f"kw:{kind}p:{key}:{n}") for n in keywords.DAYS if n != days]
+    back = kw_sku_back(key) if kind == "s" else ("⬅️ Категории", "kw:c")
+    markup = kb([[("⬇️ Скачать Excel", f"kw:x{kind}:{key}:{days}")] + other, [back, ("⬅️ Меню", "menu")]])
+    if kind == "s":
+        caption = (f"{data['offer_id']} · {data['start']:%d.%m}–{data['end']:%d.%m}\n"
+                   f"Заказы {dashboard.num(data['total_orders'])} шт: с рекламы {dashboard.num(data['ad_orders'])}, "
+                   f"органика {dashboard.num(data['organic_orders'])}. "
+                   + (f"ДРР {data['drr']:.1f}%." if data["drr"] is not None else ""))
+    else:
+        caption = f"{data['name']} · {data['start']:%d.%m}–{data['end']:%d.%m} · {data['n_skus']} артикулов"
+    await send_png(msg, lambda p: dashboard.keywords_png(data, p), caption, markup)
+
+
+async def kw_excel(msg: Message, kind, key, days):
+    data = await asyncio.to_thread(kw_build, kind, key, days)
+    tmp = tempfile.mkdtemp()
+    try:
+        label = data["offer_id"] if kind == "s" else data["name"]
+        safe = re.sub(r"[^\w\-]+", "_", label)[:40]
+        path = os.path.join(tmp, f"Ключи_{safe}_{data['start']:%d.%m}-{data['end']:%d.%m}.xlsx")
+        await asyncio.to_thread(keywords.to_xlsx, data, path)
+        await msg.answer_document(FSInputFile(path), caption=f"Запросы за {days} дней")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+async def kw_button(msg: Message, user_id, d):
+    if d == "kw":
+        await msg.answer("Ключевые запросы Ozon: по каким запросам находят и покупают, место в выдаче, "
+                         "что идёт от рекламы. Категория — общий топ-15, артикул — его топ-15 и фразы РК.",
+                         reply_markup=KW_MENU)
+    elif d == "kw:c":
+        await msg.answer("Выберите категорию:", reply_markup=kw_categories("cd"))
+    elif d == "kw:a":
+        await msg.answer("Выберите категорию, в ней — артикул:", reply_markup=kw_categories("al"))
+    elif d == "kw:m":
+        waiting[user_id] = "kw"
+        await msg.answer("Пришлите артикул (например OZ214) или SKU Ozon.")
+    elif d.startswith("kw:al:"):
+        await kw_articles(msg, d[6:])
+    elif d.startswith("kw:cd:"):
+        await msg.answer("За какой период?", reply_markup=kw_days_kb(f"cp:{d[6:]}", ("⬅️ Категории", "kw:c")))
+    elif d.startswith("kw:sd:"):
+        await msg.answer("За какой период?", reply_markup=kw_days_kb(f"sp:{d[6:]}", kw_sku_back(d[6:])))
+    elif d.startswith(("kw:sp:", "kw:cp:")):
+        _, t, key, days = d.split(":")
+        await kw_show(msg, t[0], key, int(days))
+    elif d.startswith(("kw:xs:", "kw:xc:")):
+        _, t, key, days = d.split(":")
+        await kw_excel(msg, t[1], key, int(days))
+
+
+def kw_prefetch():
+    """Ночью: запросы всех продающих артикулов за 7 и 28 дней (и прошлые периоды) + реклама активных кампаний."""
+    today = datetime.now(MSK).date()
+    end = keywords.ready_day(oz, db, today)
+    skus = [r[0] for r in db.execute(
+        "select d.sku from daily d join sku s using (sku) where d.day >= ? group by d.sku "
+        "having sum(d.ordered_units) > 0", (str(end - timedelta(days=55)),)) ]
+    skus = [x for x in skus if not is_test((store.find_sku(db, x) or {"offer_id": ""})["offer_id"])]
+    # дневные срезы за всё окно Ozon (35 дн): из них потом считается место за прошлые 28 дней,
+    # когда Ozon этот период уже не отдаёт; уже скачанные дни пропускаются
+    keywords.oq.fetch_range(db, skus, today - timedelta(days=keywords.oq.HISTORY_DAYS - 1), end, oz)
+    for days in keywords.DAYS:
+        cur, prev = keywords.periods(end, days)
+        keywords.oq.period(db, skus, *cur, oz)
+        keywords.oq.period_or_days(db, skus, *prev, oz, today)
+        keywords.aq.prefetch(db, perf(), *cur, today)
+    log.info("ключи загружены: %s SKU по %s", len(skus), end)
+
+
 def render_morning(prefix):
     return dashboard.morning_png(morning.build(db, oz, data_day()), prefix)
 
@@ -403,6 +528,8 @@ async def on_button(cb: CallbackQuery):
     elif d.startswith("r:"):
         t, key = d[2:].split(":", 1)
         await (category_signals(msg, key) if t == "c" else signal_sku(msg, key))
+    elif d == "kw" or d.startswith("kw:"):
+        await kw_button(msg, cb.from_user.id, d)
 
 
 async def pos_day(msg: Message):
@@ -598,6 +725,9 @@ async def on_text(msg: Message):
         return await signal_sku(msg, s["sku"])
     if mode == "pos":
         return await pos_sku(msg, s["sku"])
+    if mode == "kw":
+        return await msg.answer(f"{s['offer_id'] or s['sku']}: за какой период?",
+                                reply_markup=kw_days_kb(f"sp:{s['sku']}", kw_sku_back(s["sku"])))
     await card(msg, f"s:{s['sku']}", "week")
 
 
@@ -616,6 +746,7 @@ async def scheduler(bot: Bot):
     Если в 9:00 бот был выключен, сводка уйдёт сразу после запуска (до конца дня)."""
     url = os.environ.get("HEALTHCHECK_URL")
     db.execute("create table if not exists sent (day text primary key)")
+    db.execute("create table if not exists kw_loaded (day text primary key)")
     while True:
         now = datetime.now(MSK)
         today = str(now.date())
@@ -633,6 +764,13 @@ async def scheduler(bot: Bot):
                 await asyncio.to_thread(refresh_data)
             except Exception:
                 log.exception("обновление не удалось")
+        if now.hour >= KEYWORDS_HOUR and not db.execute("select 1 from kw_loaded where day = ?", (today,)).fetchone():
+            try:
+                await asyncio.to_thread(kw_prefetch)
+                db.execute("insert into kw_loaded values (?)", (today,))
+                db.commit()
+            except Exception:
+                log.exception("ночная загрузка ключей не удалась, повторю через 5 минут")
         if url:
             try:
                 async with httpx.AsyncClient() as c:

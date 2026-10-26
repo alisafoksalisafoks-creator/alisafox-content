@@ -541,3 +541,78 @@ def position_calendar_png(title, subtitle, cells, days, move, prefix):
              "Источник: Ozon Seller API.")
     p.save(path)
     return [path]
+
+
+KW_NOTE = ("Место — средняя позиция в выдаче за период (Ozon, аналитика запросов), ▲ — поднялись выше к прошлому\n"
+           "такому же периоду. Заказы по запросу — реклама и органика вместе: Ozon их не делит. «РК» — запрос есть\n"
+           "в активной кампании «Вывод в топ».")
+KW_AD_NOTE = ("Только активные кампании. По фразам Ozon отдаёт показы и клики, расхода и заказов по фразе нет.\n"
+              "Заказы с рекламы — атрибуция Ozon по SKU, органика = все заказы − рекламные.")
+
+
+def _place(cur, prev, has_prev=True):
+    if cur is None:
+        return ("—", MUTED), ("", MUTED)
+    place = (f"{cur:.0f}", INK)
+    if prev is None and not has_prev:
+        return place, ("", MUTED)
+    if prev is None:
+        return place, ("нов.", MUTED)
+    d = round(prev) - round(cur)
+    if d == 0:
+        return place, ("≈", MUTED)
+    return place, (f"{'▲' if d > 0 else '▼'}{abs(d)}", GOOD if d > 0 else BAD)
+
+
+def keywords_png(data, prefix):
+    """«Ключи»: лист топ-15 запросов, для артикула ещё лист рекламных фраз. Возвращает пути PNG."""
+    period = f"Ozon · {data['start']:%d.%m}–{data['end']:%d.%m} · {data['days']} дн"
+    if data["kind"] == "s":
+        title = f"{data['offer_id']} · {short(data['name'] or '', 26)}"
+        tiles = [{"name": "Заказы всего, шт", "value": data["total_orders"], "plain": True},
+                 {"name": "С рекламы, шт", "value": data["ad_orders"], "plain": True},
+                 {"name": "Органика, шт", "value": data["organic_orders"], "plain": True}]
+    else:
+        title = short(data["name"], 30)
+        q_orders = sum(r["orders"] or 0 for r in data["rows"])
+        tiles = [{"name": "Заказы категории, шт", "value": data["total_orders"], "plain": True},
+                 {"name": "С топ-15 запросов, шт", "value": q_orders, "plain": True},
+                 {"name": "Артикулов", "value": data["n_skus"], "plain": True}]
+    cols = [(0.05, "Запрос", "left"), (0.62, "место", "right"), (0.72, "", "right"), (0.84, "заказы", "right"),
+            (0.95, "искали", "right")]
+    rows = []
+    has_prev = any(r["prev_position"] is not None for r in data["rows"])
+    for r in data["rows"]:
+        place, delta = _place(r["position"], r["prev_position"], has_prev)
+        bits = [f"{num(r['gmv'] or 0)} ₽"]
+        if data["kind"] == "s":
+            bits.append(f"конв. {r['conv'] or 0:.1f}%")
+            if not r["in_title"]:
+                bits.append("нет в названии")
+        else:
+            bits.append(f"лучше всех {r['best_offer']} (место {r['best_position']:.0f})" if r["best_position"] else "")
+            bits.append(f"{r['n_skus']} арт.")
+        if r.get("ad"):
+            bits.append("РК")
+        rows.append(([(short(r["query"], 30), INK, True), (place[0], place[1], True), (delta[0], delta[1], True),
+                      (num(r["orders"] or 0), INK, False), (num(r["searches"] or 0), INK2, False)],
+                     " · ".join(b for b in bits if b)))
+    paths = _sheets(title, period, "Топ-15 запросов", cols, rows, "● запросов за период нет", prefix + "_q",
+                    KW_NOTE + ("" if has_prev or not data["rows"] else
+                               f"\nСравнения с прошлыми {data['days']} дн пока нет: Ozon хранит запросы 35 дней, бот копит историю сам."),
+                    per_sheet=15, max_sheets=1, tiles=tiles)
+    if data["kind"] != "s":
+        return paths
+    ad_tiles = [{"name": "Расход РК, ₽", "value": data["ad_spent"], "plain": True},
+                {"name": "ДРР артикула, %", "value": data["drr"] or 0, "plain": True},
+                {"name": "Доля органики, %", "plain": True,
+                 "value": data["organic_orders"] / data["total_orders"] * 100 if data["total_orders"] else 0}]
+    cols = [(0.05, "Фраза в рекламе", "left"), (0.66, "показы", "right"), (0.81, "клики", "right"),
+            (0.95, "CTR", "right")]
+    rows = [([(short(x["query"], 32), INK, True), (num(x["views"]), INK, False), (num(x["clicks"]), INK, False),
+              (f"{x['clicks'] / x['views'] * 100:.1f}%" if x["views"] else "—", INK2, False)], "")
+            for x in data["phrases"][:15]]
+    camps = ", ".join(c[2] for c in data["campaigns"] if c[1] == "PLACEMENT_TOP_PROMOTION")
+    empty = "● нет активной кампании «Вывод в топ»" if not camps else "● фраз за период нет"
+    return paths + _sheets(title, period + (f" · {short(camps, 30)}" if camps else ""), "Запросы РК", cols, rows,
+                           empty, prefix + "_a", KW_AD_NOTE, per_sheet=15, max_sheets=1, tiles=ad_tiles)
