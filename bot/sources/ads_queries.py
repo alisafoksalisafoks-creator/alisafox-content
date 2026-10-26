@@ -17,7 +17,7 @@ from bot.sources.performance import PerformanceClient
 
 TOP = "PLACEMENT_TOP_PROMOTION"
 MAX_CAMPS = 10  # кампаний в одном отчёте
-MIN_VIEWS = 100  # фразы с меньшим числом показов не показываем (владелец 2026-10-26)
+MIN_VIEWS_28 = 100  # фразы с меньшим числом показов за 28 дн не показываем, для коротких периодов — пропорционально
 
 
 def ensure_tables(db):
@@ -149,10 +149,11 @@ def for_sku(db, perf, sku, start: date, end: date, today: date):
         f"coalesce(sum(spent), 0) spent, coalesce(sum(orders), 0) orders, coalesce(sum(orders_money), 0) orders_money "
         f"from ad_sku where start = ? and end = ? and sku = ? and campaign in ({marks})", (*key, sku, *cids)).fetchone()
     tmarks = ",".join("?" * len(top)) or "''"
+    min_views = round(MIN_VIEWS_28 * ((end - start).days + 1) / 28)
     phrases = db.execute(
         f"select query, sum(views) views, sum(clicks) clicks from ad_phrases "
         f"where start = ? and end = ? and sku = ? and campaign in ({tmarks}) group by lower(query) "
-        f"having sum(views) >= {MIN_VIEWS} order by clicks desc, views desc", (*key, sku, *top)).fetchall()
+        f"having sum(views) >= {min_views} order by clicks desc, views desc", (*key, sku, *top)).fetchall()
     return {"campaigns": camps, "totals": dict(tot), "phrases": [dict(p) for p in phrases]}
 
 
