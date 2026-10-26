@@ -3,3 +3,6 @@ __pycache__/
 .env
 .venv/
 bot/costs_fallback.csv
+secretary/data.sqlite
+secretary/managers.json
+secretary/.env
