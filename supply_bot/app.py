@@ -421,33 +421,10 @@ def wh_keyboard(plan, page, prefix):
     return kb(rows)
 
 
-async def scheduler(bot):
-    """В дни отгрузки (пн, ср, пт) в 9:00 МСК — сводка в разрешённые чаты. Файл — только по кнопке."""
-    while True:
-        now = datetime.now(MSK)
-        nxt = now.replace(hour=9, minute=0, second=0, microsecond=0)
-        while nxt <= now or nxt.weekday() not in config.SHIP_WEEKDAYS:
-            nxt += timedelta(days=1)
-        await asyncio.sleep((nxt - now).total_seconds())
-        try:
-            async with S.lock:
-                S.snap = await asyncio.to_thread(snapshot, False, log.info)
-                S.overrides = {}
-                S.save_overrides()
-                S.plan = calc.build(S.snap)
-            texts = render.summary(S.plan, S.snap.taken_at)
-            for chat in allowed_chats():
-                for i, t in enumerate(texts):
-                    await bot.send_message(chat, t, reply_markup=SCREEN if i == len(texts) - 1 else None)
-        except Exception:  # noqa: BLE001 — сбой одного запуска не роняет бота
-            log.exception("плановый расчёт не удался")
-
-
 async def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     bot = Bot(os.environ["TELEGRAM_SUPPLY_BOT_TOKEN"].strip(), default=DefaultBotProperties(parse_mode="HTML"))
-    if os.environ.get("SUPPLY_BOT_SCHEDULE", "1") == "1":
-        asyncio.create_task(scheduler(bot))
+    # сам бот ничего не присылает: расчёт только по кнопке (решение владельца 26.10.2026)
     await dp.start_polling(bot)
 
 
