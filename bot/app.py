@@ -476,8 +476,10 @@ async def pos_sku(msg: Message, sku):
     c = positions.sku_card(db, sku, day)
     sub = f"Ozon · {dashboard.short(s['name'], 40) if s else sku} · 28 дн по {day:%d.%m}"
     lab = positions.move(c["cur"], c["prev"])[0]
+    best = f", лучшая {dashboard._pos(c['best'][1])} ({c['best'][0]:%d.%m})" if c["best"] else ""
     await send_png(msg, lambda p: dashboard.position_png(name, sub, c, positions.move, p),
-                   f"{name}: позиция {dashboard._pos(c['cur'])} за {day:%d.%m} ({lab} к пред. дню)",
+                   f"{name}: позиция {dashboard._pos(c['cur'])} за {day:%d.%m} ({lab} к пред. дню). "
+                   f"За 28 дней: средняя {dashboard._pos(c['avg'])}{best}.",
                    kb([excel_kb(f"s{sku}"), [("⭐ Новинки", "pos:n"), ("⬅️ Позиции", "pos")]]))
 
 

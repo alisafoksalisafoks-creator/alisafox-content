@@ -462,30 +462,9 @@ def positions_list_png(title, subtitle, rows, move, prefix):
 
 
 def position_png(title, subtitle, c, move, prefix):
-    """Артикул: плитки и график средней позиции по дням за 28 дней (ось перевёрнута: выше — лучше)."""
-    p = Page(0.35 + 0.78 + 2 * 1.0 + 3.0 + 0.85, SHEET_W)
+    """Артикул: график средней позиции по дням за 28 дней (ось перевёрнута: выше — лучше)."""
+    p = Page(0.35 + 0.78 + 3.0 + 0.85, SHEET_W)
     p.header(short(title, 30), subtitle)
-    l1, k1 = move(c["cur"], c["prev"])
-    l7, k7 = move(c["cur"], c["week"])
-    la, ka = move(c["avg"], c["avg_prev"])
-    tiles = [("Позиция за день", c["cur"], l1 + " к пред. дню", k1), ("Неделю назад", c["week"], l7 + " с тех пор", k7),
-             ("Средняя за 28 дн", c["avg"], la + " к пред. 28", ka),
-             ("Лучшая за 28 дн", c["best"][1] if c["best"] else None,
-              f"{c['best'][0]:%d.%m}" if c["best"] else "", "none")]
-    gx, th, w = 0.02, 0.85, (0.9 - 0.02) / 2
-    for row in range(0, 4, 2):
-        p.y -= th
-        for i, (name, v, lab, kind) in enumerate(tiles[row:row + 2]):
-            ax = p.fig.add_axes([0.05 + i * (w + gx), p.y / p.h, w, th / p.h])
-            ax.set_facecolor(TILE)
-            ax.set_xticks([]), ax.set_yticks([])
-            for s in ax.spines.values():
-                s.set_visible(False)
-            ax.text(0.06, 0.76, name, fontsize=8.5, color=INK2, transform=ax.transAxes, va="center")
-            ax.text(0.06, 0.34, _pos(v), fontsize=15, fontweight="bold", color=INK, transform=ax.transAxes, va="center")
-            ax.text(0.94, 0.34, lab, fontsize=9.5, fontweight="bold", color=POS_COLOR[kind] if kind != "none" else MUTED,
-                    transform=ax.transAxes, va="center", ha="right")
-        p.y -= 0.15
     p.text(0.05, 0.35, "Средняя позиция по дням", fontsize=11, fontweight="bold", color=INK)
     p.y -= 0.32
     ax = p.box(0.1, 2.0, 0.85)
@@ -515,6 +494,7 @@ def position_png(title, subtitle, c, move, prefix):
         ax.spines[side].set_visible(False)
     ax.spines["bottom"].set_color(GRID)
     path = f"{prefix}_1.png"
-    p.footer(POS_NOTE + f"\nПоказы за 28 дней: {num(c['views'])}. Пропуск на графике — товар не показывался.")
+    p.footer("Средняя позиция в поиске и каталоге Ozon за день: чем меньше число, тем выше товар.\n"
+             f"Пропуск на графике — товар не показывался. Показы за 28 дней: {num(c['views'])}. Источник: Ozon Seller API.")
     p.save(path)
     return [path]

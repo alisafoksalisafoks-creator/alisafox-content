@@ -96,37 +96,24 @@ def sku_card(db, sku, day: date):
 
 
 def excel(db, items, start: date, end: date, path):
-    """Excel за период: лист «По дням» (артикул × дата) и лист «Подробно» (строка на день)."""
+    """Excel за период: строка — артикул, столбцы — дни, в ячейке средняя позиция за день."""
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     wb = Workbook()
-    bold, head = Font(bold=True), PatternFill("solid", fgColor="F3F2EF")
     ws = wb.active
-    ws.title = "По дням"
-    ws.append(["Артикул", "SKU", "Название"] + [f"{d:%d.%m}" for d in days])
+    ws.title = "Позиции по дням"
+    ws.append(["Артикул"] + [f"{d:%d.%m}" for d in days])
     for it in items:
         s = series(db, it["sku"], start, end)
-        ws.append([it.get("offer_id") or "", int(it["sku"]), it.get("name") or ""]
-                  + [round(p, 1) if p is not None else None for _, p, _ in s])
-    ws2 = wb.create_sheet("Подробно")
-    ws2.append(["Дата", "Артикул", "SKU", "Средняя позиция", "Изменение к пред. дню, мест", "Показы"])
-    for it in items:
-        s = series(db, it["sku"], start - timedelta(days=1), end)
-        for (_, old, _), (d, p, v) in zip(s, s[1:]):
-            dd = change(p, old)
-            ws2.append([d, it.get("offer_id") or "", int(it["sku"]), round(p, 1) if p is not None else None,
-                        round(dd, 1) if dd is not None else None, v or 0])
-    for sheet in (ws, ws2):
-        for c in sheet[1]:
-            c.font, c.fill = bold, head
-            c.alignment = Alignment(wrap_text=True, vertical="center")
-        sheet.freeze_panes = "D2" if sheet is ws else "A2"
-        for i, col in enumerate(sheet.columns, 1):
-            width = max(len(str(c.value or "")) for c in col)
-            sheet.column_dimensions[get_column_letter(i)].width = min(max(8, width + 2), 45)
-    for row in ws2.iter_rows(min_row=2, min_col=1, max_col=1):
-        row[0].number_format = "DD.MM.YYYY"
+        ws.append([it.get("offer_id") or it["sku"]] + [round(p) if p is not None else None for _, p, _ in s])
+    for c in ws[1]:
+        c.font, c.fill = Font(bold=True), PatternFill("solid", fgColor="F3F2EF")
+        c.alignment = Alignment(horizontal="center")
+    ws.freeze_panes = "B2"
+    ws.column_dimensions["A"].width = max([10] + [len(str(r[0].value or "")) + 2 for r in ws.iter_rows(max_col=1)])
+    for i in range(2, len(days) + 2):
+        ws.column_dimensions[get_column_letter(i)].width = 7
     ws.append([])
     ws.append(["Средняя позиция в поиске и каталоге Ozon за день: чем меньше, тем выше товар. "
-               "Пусто — в этот день товар не показывался. Источник: Ozon Seller API, /v1/analytics/data (position_category)."])
+               "Пусто — в этот день товар не показывался. Источник: Ozon Seller API."])
     wb.save(path)
     return path
