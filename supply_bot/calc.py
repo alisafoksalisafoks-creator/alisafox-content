@@ -151,6 +151,8 @@ def pack(qty, sizes):
             out[s] = rem // s
             rem -= out[s] * s
     if not out and rem * 2 < small:
+        if rem < config.PARTIAL_MIN:  # меньше 5 шт неполным коробом не везём
+            return [], rem, 0
         part = min(-(-rem // 10) * 10, small)
         return ([(small, 1)], 0, 0) if part == small else ([], 0, part)
     dropped = 0
@@ -429,7 +431,8 @@ def build(snap, overrides=None):
     plan.small = [{"offer": ln.offer, "warehouse": ln.warehouse, "need": ln.need, "speed": ln.speed,
                    "box": min((sz for _, sz in _sizes(norm(ln.offer), ln.root, snap.boxes)), default=None),
                    "priority": ln.priority,
-                   "why": "не хватило нашего склада" if any(x["root"] == ms_by[eligible[norm(ln.offer)]["key"]]["article"]
+                   "why": f"меньше {config.PARTIAL_MIN} шт — неполным коробом не везём" if 0 < ln.need < config.PARTIAL_MIN
+                   else "не хватило нашего склада" if any(x["root"] == ms_by[eligible[norm(ln.offer)]["key"]]["article"]
                                                              for x in plan.purchase) else "меньше полного короба"}
                   for ln in lines.values() if ln.need > 0 and ln.qty == 0 and not ln.manual]
     plan.lines = sorted((ln for ln in lines.values() if ln.qty > 0 or ln.manual),
