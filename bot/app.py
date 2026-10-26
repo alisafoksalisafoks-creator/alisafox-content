@@ -785,9 +785,13 @@ async def scheduler(bot: Bot):
 
 async def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if store.last_day(db) is None or SEARCH and store.no_positions(db):
-        log.info("загрузка истории за %s дней (продажи и позиции), это займёт 10–20 минут", store.FIRST_LOAD_DAYS)
+    if store.last_day(db) is None:
+        log.info("первая загрузка истории за %s дней, это займёт 10–20 минут", store.FIRST_LOAD_DAYS)
         await asyncio.to_thread(refresh_data)
+    elif SEARCH and store.no_positions(db):
+        # история продаж уже есть — позиции догружаем фоном, бот тем временем отвечает
+        log.info("догружаю позиции за %s дней фоном", store.FIRST_LOAD_DAYS)
+        asyncio.create_task(asyncio.to_thread(refresh_data))
     session = AiohttpSession()
     if os.environ.get("SSL_CERT_FILE"):  # свой корневой сертификат (прокси облачной сессии)
         session._connector_init["ssl"] = ssl.create_default_context(cafile=os.environ["SSL_CERT_FILE"])
