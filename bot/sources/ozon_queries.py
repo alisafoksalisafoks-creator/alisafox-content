@@ -16,6 +16,7 @@ LIMIT_BY_SKU = 15   # максимум, который принимает Ozon
 PAGE_SIZE = 100
 SKU_BATCH = 50
 LAG_DAYS = 2
+HISTORY_DAYS = 35  # глубже Ozon запросы не отдаёт (проверено 2026-10-26: самый ранний день — сегодня − 35)
 
 
 def ensure_table(db):
@@ -108,3 +109,103 @@ def positions(db, sku, start: date, end: date):
     return db.execute(
         "select day, query, position from query_stats where sku = ? and day between ? and ? "
         "order by day, query", (str(sku), str(start), str(end))).fetchall()
+
+
+# Срез за период целиком (кнопка «Ключи»): Ozon сам сводит период и отдаёт топ-15 запросов SKU
+# со средней позицией. Кэш по (start, end, sku): прошлые периоды не меняются.
+
+def ensure_period_table(db):
+    db.executescript("""
+        create table if not exists query_period (
+            start text, end text, sku text, query text,
+            position real, orders real, gmv real, conv real, searches real, views real,
+            primary key (start, end, sku, query));
+        create table if not exists query_period_done (
+            start text, end text, sku text, primary key (start, end, sku));
+    """)
+
+
+def _fetch_period(oz: OzonClient, skus, start: date, end: date):
+    rows, page = [], 0
+    while True:
+        try:
+            res = oz.post(PATH, {
+                "date_from": f"{start}T00:00:00Z", "date_to": f"{end}T23:59:59Z",
+                "skus": [str(s) for s in skus],
+                "page": page, "page_size": PAGE_SIZE,
+                "sort_by": "BY_SEARCHES", "sort_dir": "DESCENDING",
+                "limit_by_sku": LIMIT_BY_SKU,
+            })
+        except httpx.HTTPStatusError as e:
+            if "no data for the specified period" in e.response.text:
+                return None
+            raise
+        rows += res.get("queries", [])
+        page += 1
+        if page >= res.get("page_count", 0):
+            return rows
+        time.sleep(1)
+
+
+def last_ready_day(oz: OzonClient, sku, today: date | None = None) -> date:
+    """Вчера, если Ozon уже посчитал запросы за вчера, иначе позавчера."""
+    y = (today or date.today()) - timedelta(days=1)
+    return y if _fetch_period(oz, [sku], y, y) is not None else y - timedelta(days=1)
+
+
+def period(db, skus, start: date, end: date, oz: OzonClient | None = None):
+    """Запросы SKU за период: {sku: [row, ...]}; недостающие SKU догружаются из Ozon."""
+    ensure_period_table(db)
+    key = (str(start), str(end))
+    skus = [str(s) for s in skus]
+    have = {r[0] for r in db.execute("select sku from query_period_done where start = ? and end = ?", key)}
+    todo = [s for s in skus if s not in have]
+    if todo and oz is None:
+        oz = OzonClient()
+    for i in range(0, len(todo), SKU_BATCH):
+        batch = todo[i:i + SKU_BATCH]
+        rows = _fetch_period(oz, batch, start, end)
+        if rows is None:
+            break
+        db.executemany(
+            "insert or replace into query_period values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(*key, str(r["sku"]), r["query"], r.get("position"), r.get("order_count"), r.get("gmv"),
+              r.get("view_conversion"), r.get("unique_search_users"), r.get("unique_view_users")) for r in rows])
+        db.executemany("insert or ignore into query_period_done values (?, ?, ?)", [(*key, s) for s in batch])
+        db.commit()
+        time.sleep(1)
+    out = {s: [] for s in skus}
+    marks = ",".join("?" * len(skus))
+    for r in db.execute(f"select * from query_period where start = ? and end = ? and sku in ({marks})",
+                        (*key, *skus)):
+        out[r["sku"]].append(dict(r))
+    return out
+
+
+def from_days(db, skus, start: date, end: date):
+    """Период из сохранённых дневных срезов (когда Ozon уже не отдаёт период целиком):
+    {sku: [row]} с местом, средним по показам, и суммами заказов. Только если покрыто ≥ половины дней."""
+    ensure_table(db)
+    skus = [str(s) for s in skus]
+    out = {s: [] for s in skus}
+    if not skus:
+        return out
+    marks = ",".join("?" * len(skus))
+    covered = {r[0]: r[1] for r in db.execute(
+        f"select sku, count(*) from query_days where day between ? and ? and sku in ({marks}) group by sku",
+        (str(start), str(end), *skus))}
+    need = ((end - start).days + 1) / 2
+    for r in db.execute(
+            f"select sku, query, sum(position * views) / nullif(sum(views), 0) position, sum(orders) orders, "
+            f"sum(gmv) gmv, sum(searches) searches, sum(views) views from query_stats "
+            f"where day between ? and ? and sku in ({marks}) group by sku, query", (str(start), str(end), *skus)):
+        if covered.get(r["sku"], 0) >= need:
+            out[r["sku"]].append(dict(r))
+    return out
+
+
+def period_or_days(db, skus, start: date, end: date, oz: OzonClient | None = None, today: date | None = None):
+    """Период из Ozon, а если он уже старше окна истории Ozon — из дневных срезов."""
+    if start >= (today or date.today()) - timedelta(days=HISTORY_DAYS - 1):
+        return period(db, skus, start, end, oz)
+    return from_days(db, skus, start, end)
