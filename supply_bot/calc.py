@@ -131,6 +131,36 @@ def pick_boxes(qty, sizes, cap):
     return [(s, k) for s, k in sorted(out, key=lambda x: -x[0])]
 
 
+PARTIAL = "неполный короб"
+
+
+def pack(qty, sizes):
+    """Правило коробов (26.10.2026): полными коробами от большого к малому.
+
+    Сверх короба (что не влезло в полные короба) не меньше половины самого маленького короба — ещё один
+    маленький короб, меньше — не везём. Потребность меньше половины самого маленького короба — неполный
+    короб, округлённый вверх до 10 шт. Возвращает ([(шт, коробов)], сверх короба не везём шт, шт в неполном).
+    """
+    sizes = sorted({s for _, s in sizes if s > 0}, reverse=True)
+    if not sizes or qty <= 0:
+        return [], 0, 0
+    small = sizes[-1]
+    out, rem = {}, qty
+    for s in sizes:
+        if rem // s:
+            out[s] = rem // s
+            rem -= out[s] * s
+    if not out and rem * 2 < small:
+        part = min(-(-rem // 10) * 10, small)
+        return ([(small, 1)], 0, 0) if part == small else ([], 0, part)
+    dropped = 0
+    if rem and rem * 2 >= small:
+        out[small] = out.get(small, 0) + 1
+    else:
+        dropped = rem
+    return sorted(out.items(), key=lambda x: -x[0]), dropped, 0
+
+
 def label_boxes(boxes, sizes):
     """[(шт, коробов)] → [(короб, шт, коробов)] с названием короба из файла квантов."""
     name_of = {}
@@ -337,15 +367,16 @@ def build(snap, overrides=None):
             down, up = pick_boxes(ln.qty, sizes, ln.qty), pick_boxes(ln.qty, sizes, 10 ** 9)
             boxes = min((up, down), key=lambda bx: abs(sum(s * k for s, k in bx) - ln.qty))
         else:
-            # вверх до короба — только если запас после поставки не больше L + 30 + 3 дней
-            cap = round(ln.need + ln.speed * config.ROUND_UP_EXTRA_DAYS)
-            if ln.priority == "срочно" and ln.qty < min(sz for _, sz in sizes):
-                # срочно, а потребность меньше короба: один короб, если запас не уйдёт дальше L + 60 дней
-                cap = max(cap, int(ln.speed * (ln.lead + config.URGENT_MAX_DAYS) - ln.have))
-            boxes = pick_boxes(ln.qty, sizes, max(cap, ln.qty))
-            got = sum(sz * k for sz, k in boxes)
-            if got > ln.need + ln.speed * config.ROUND_UP_EXTRA_DAYS and ln.speed:
-                ln.flags.append(f"короб вверх: запас после поставки {(ln.have + got) / ln.speed - ln.lead:.0f} дн")
+            boxes, dropped, part = pack(ln.qty, sizes)
+            if dropped:
+                ln.flags.append(f"сверх короба {dropped} шт не везём (меньше половины короба {min(sz for _, sz in sizes)})")
+            elif sum(sz * k for sz, k in boxes) > ln.qty:
+                ln.flags.append(f"сверх короба +{sum(sz * k for sz, k in boxes) - ln.qty} шт до полного короба")
+            if part:
+                ln.boxes = [(f"{PARTIAL} ({min(sizes, key=lambda x: x[1])[0]})", part, 1)]
+                ln.qty = part
+                ln.flags.append(f"{PARTIAL}: нужно {ln.need}, самый маленький короб {min(sz for _, sz in sizes)} шт")
+                continue
         ln.boxes = label_boxes(boxes, sizes)
         ln.qty = sum(s * k for _, s, k in ln.boxes)
 

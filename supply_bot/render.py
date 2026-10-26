@@ -28,7 +28,7 @@ def chunks(lines, head=""):
 def _boxes(ln):
     if not ln.boxes:
         return "нет кванта"
-    return " + ".join(f"{k}×{s}" for _, s, k in ln.boxes)
+    return " + ".join(f"неполный {s}" if n.startswith("неполный") else f"{k}×{s}" for n, s, k in ln.boxes)
 
 
 def summary(plan, taken_at=""):
@@ -77,16 +77,17 @@ def warehouse(plan, name):
             "",
             "<b>Как считаю</b>: скорость = отгрузки кластера за 14 дн ÷ 14 × сезон. "
             f"Потребность = скорость × (срок L + {config.TARGET_DAYS}) − (доступно + в пути на Ozon). "
-            "Везём потребность в пределах нашего склада, целыми коробами.", ""]
+            "Везём в пределах нашего склада: полные короба; сверх короба от половины маленького короба — ещё короб; потребность меньше половины маленького короба — 🟨 неполный короб (до 10 шт вверх).", ""]
     rows = []
     for ln in sorted(items, key=lambda x: (-["обычно", "наверх", "срочно"].index(x.priority), -x.qty)):
         days = f"{ln.days:.0f} дн" if ln.days is not None else "—"
         flag = (" · " + escape("; ".join(ln.flags))) if ln.flags else ""
-        rows.append(f"{ICON[ln.priority]} <code>{escape(ln.offer)}</code> — <b>{fmt(ln.qty)}</b> шт ({_boxes(ln)}) · "
+        part = "🟨 " if any(n.startswith("неполный") for n, _, _ in ln.boxes) else ""
+        rows.append(f"{ICON[ln.priority]} {part}<code>{escape(ln.offer)}</code> — <b>{fmt(ln.qty)}</b> шт ({_boxes(ln)}) · "
                     f"{ln.speed:.1f}/дн, запас {days}{flag}\n"
                     f"   {ln.sales14} шт за 14 дн → {ln.speed:.1f}/дн × ({ln.lead}+{config.TARGET_DAYS}) − "
                     f"{fmt(ln.have)} на Ozon = {fmt(ln.need)} → везём {fmt(ln.qty)}"
-                    + ("" if ln.qty == ln.need else " (целые короба, в пределах нашего склада)"))
+                    + ("" if ln.qty == ln.need else " (по коробам, в пределах нашего склада)"))
     return chunks(head + rows)
 
 

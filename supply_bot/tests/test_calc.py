@@ -177,3 +177,13 @@ def test_box_quants_found_by_root_article():
     assert calc._sizes("OZ299NEW", "OZ299", boxes) == [("A", 200)]
     from supply_bot.sources.sheets import norm
     assert calc._sizes(norm("OZ657-Р10"), "", boxes) == [("A", 80)]       # кириллическая Р в таблице
+
+
+def test_box_rule_over_box_and_partial():
+    sizes = [("A", 40), ("B", 15)]
+    assert calc.pack(70, sizes) == ([(40, 1), (15, 2)], 0, 0)          # 40 + 2×15, ровно
+    assert calc.pack(52, sizes) == ([(40, 1), (15, 1)], 0, 0)          # сверх короба 12 ≥ 7.5 → +15
+    assert calc.pack(45, sizes) == ([(40, 1)], 5, 0)                   # сверх короба 5 < 7.5 → не везём
+    assert calc.pack(6, [("C", 10), ("D", 7)]) == ([(7, 1)], 0, 0)     # 6 ≥ половины 7 → полный короб
+    assert calc.pack(8, [("E", 40)]) == ([], 0, 10)                    # неполный короб, вверх до 10
+    assert calc.pack(3, [("F", 10)]) == ([(10, 1)], 0, 0)              # неполный = целый короб 10

@@ -4,10 +4,12 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from . import config
+from .calc import PARTIAL
 
 BOLD = Font(bold=True)
 HEAD = PatternFill("solid", fgColor="DDE7F0")
 TOTAL = PatternFill("solid", fgColor="F2F2F2")
+PARTIAL_FILL = PatternFill("solid", fgColor="FFF2A8")
 
 
 def _sheet(wb, title, header, rows, widths=None):
@@ -39,6 +41,9 @@ def _distribution(wb, plan, groups):
             if ln.boxes:
                 for name, s, k in ln.boxes:
                     ws.append([wh, ln.cluster, ln.ship_to, ln.offer, s * k, name, s, k, plan.ship_date, ln.priority, "; ".join(ln.flags)])
+                    if name.startswith(PARTIAL):  # неполный короб — вся строка жёлтая
+                        for c in ws[ws.max_row]:
+                            c.fill = PARTIAL_FILL
             else:
                 ws.append([wh, ln.cluster, ln.ship_to, ln.offer, ln.qty, "нет кванта", None, None, plan.ship_date, ln.priority,
                            "; ".join(ln.flags)])
