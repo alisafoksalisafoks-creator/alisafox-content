@@ -53,6 +53,7 @@ class Line:
     manual: bool = False
     ship_to: str = ""         # склад приёмки — подсказка: наш основной склад кластера
     demand: str = ""          # «опт», «всплеск» или «рост» — строку подсвечиваем
+    main: bool = False        # приоритетный кластер артикула при нехватке нашего склада
 
     @property
     def have(self):
@@ -451,8 +452,10 @@ def build(snap, overrides=None):
         total = sum(ln.need for ln in group)
         if total > ff["free"]:
             for ln in group:
+                where = (f"приоритетный кластер (запас {config.PRIORITY_DAYS} дн, затем остаток)" if ln.main
+                         else f"запас {config.OTHER_DAYS} дн")
                 ln.flags.insert(0, f"не хватает ФФ: потребность всех кластеров {total} шт больше свободного на ФФ "
-                                   f"{ff['free']} шт — сюда {ln.qty} из {ln.need}")
+                                   f"{ff['free']} шт — сюда {ln.qty} из {ln.need}, {where}")
         for ln in group:
             if ln.manual and ln.qty > ln.need + ln.speed * config.ROUND_UP_EXTRA_DAYS and ln.speed:
                 ln.flags.append(f"запас после поставки {(ln.have + ln.qty) / ln.speed - ln.lead:.0f} дн — больше 30")
@@ -590,42 +593,34 @@ def _sizes(offer, root, boxes):
 
 
 def _level(group, free):
-    """Нашего товара не хватает на все кластеры (решение владельца 26.10.2026, «минимум + главному»).
+    """Нашего товара не хватает на все кластеры (решение владельца 26.10.2026).
 
-    Сначала каждому кластеру — запас на MIN_DAYS дней, остаток — кластерам по убыванию продаж артикула
-    (главный регион первым) до полной потребности. Не хватает даже на минимум — выравниваем дни запаса.
+    Приоритетные кластеры — где артикул продаётся больше всего: по убыванию продаж, пока вместе не наберут
+    PRIORITY_SHARE продаж артикула (главный — всегда). Раздаём по очереди, пока есть товар:
+    1) приоритетным — запас на PRIORITY_DAYS дней; 2) остальным — на OTHER_DAYS дней;
+    3) остаток — кластерам по убыванию продаж до полной потребности.
     """
-    base = {id(ln): min(ln.need, max(0, int(ln.speed * config.MIN_DAYS - ln.have))) if ln.speed else 0 for ln in group}
-    if sum(base.values()) <= free:
-        rest = free
-        for ln in group:
-            ln.qty = base[id(ln)]
-            rest -= ln.qty
-        for ln in sorted(group, key=lambda x: -x.speed):
-            add = min(rest, ln.need - ln.qty)
+    order = sorted(group, key=lambda x: -x.speed)
+    total_speed = sum(ln.speed for ln in order) or 1
+    prio, acc = set(), 0.0
+    for ln in order:
+        if acc >= config.PRIORITY_SHARE * total_speed:
+            break
+        prio.add(id(ln))
+        acc += ln.speed
+    for ln in group:
+        ln.qty = 0
+        ln.main = id(ln) in prio
+    rest = free
+    steps = [(True, config.PRIORITY_DAYS), (False, config.OTHER_DAYS)]
+    for is_prio, days in steps:
+        for ln in order:
+            if ln.main != is_prio or not ln.speed:
+                continue
+            add = min(rest, ln.need - ln.qty, max(0, int(ln.speed * days - ln.have) - ln.qty))
             ln.qty += add
             rest -= add
-        return
-    _equal_days(group, free)
-
-
-def _equal_days(group, free):
-    """Делим свободный остаток так, чтобы дни запаса по складам выровнялись."""
-    def total(t):
-        return sum(min(ln.need, max(0, ln.speed * t - ln.have)) for ln in group)
-    lo, hi = 0.0, max(ln.lead + config.TARGET_DAYS for ln in group)
-    for _ in range(60):
-        mid = (lo + hi) / 2
-        if total(mid) > free:
-            hi = mid
-        else:
-            lo = mid
-    for ln in group:
-        ln.qty = int(min(ln.need, max(0, ln.speed * lo - ln.have)))
-        if ln.speed == 0:
-            ln.qty = 0
-    rest = free - sum(ln.qty for ln in group)
-    for ln in sorted(group, key=lambda x: (-_prio_rank(x.priority), x.days or 0)):
+    for ln in order:
         add = min(rest, ln.need - ln.qty)
         ln.qty += add
         rest -= add

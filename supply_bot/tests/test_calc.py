@@ -218,12 +218,13 @@ def test_wholesale_and_spikes():
     assert ln.sales14 == 200 and ln.demand == "рост" and "спрос растёт" in ln.flags[0]
 
 
-def test_shortage_min_days_to_all_rest_to_main_cluster():
+def test_shortage_priority_cluster_14_days_others_7():
     s = snap(sales("OZ1", MSK1, 20) + sales("OZ1", KZN, 10) + sales("OZ1", SPB, 5),
              stocks=[("OZ1", MSK1, 100, 0), ("OZ1", SPB, 50, 0)], ms={"OZ1": 600}, units={"OZ1": unit("OZ1")})
     by = {ln.warehouse: ln.qty for ln in calc.build(s).lines}
-    # каждому запас на 14 дней, остаток — Москве, где артикул продаётся больше всего
-    assert by == {"Москва, МО и Дальние регионы": 440, "Казань": 140, "Санкт-Петербург и СЗО": 20}
+    # Москва — 57% продаж, приоритетная: 14 дней = 180; Казань 7 дней = 70; Питеру 50 шт уже хватает на 10 дней;
+    # остаток 350 — Москве по продажам
+    assert by == {"Москва, МО и Дальние регионы": 530, "Казань": 70}
     plan = calc.build(s)
     assert all("не хватает ФФ: потребность всех кластеров 1145 шт больше свободного на ФФ 600 шт" in ln.flags[0]
                for ln in plan.lines)
