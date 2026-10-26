@@ -3,4 +3,3 @@ matplotlib>=3.8
 aiogram>=3.13
 google-auth>=2.29
 requests>=2.31
-openpyxl>=3.1
