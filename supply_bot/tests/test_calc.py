@@ -216,3 +216,11 @@ def test_wholesale_and_spikes():
     plan = calc.build(snap(usual + grow, ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")}))
     ln = plan.lines[0]
     assert ln.sales14 == 200 and ln.demand == "рост" and "спрос растёт" in ln.flags[0]
+
+
+def test_shortage_min_days_to_all_rest_to_main_cluster():
+    s = snap(sales("OZ1", MSK1, 20) + sales("OZ1", KZN, 10) + sales("OZ1", SPB, 5),
+             stocks=[("OZ1", MSK1, 100, 0), ("OZ1", SPB, 50, 0)], ms={"OZ1": 600}, units={"OZ1": unit("OZ1")})
+    by = {ln.warehouse: ln.qty for ln in calc.build(s).lines}
+    # каждому запас на 14 дней, остаток — Москве, где артикул продаётся больше всего
+    assert by == {"Москва, МО и Дальние регионы": 440, "Казань": 140, "Санкт-Петербург и СЗО": 20}

@@ -585,6 +585,26 @@ def _sizes(offer, root, boxes):
 
 
 def _level(group, free):
+    """Нашего товара не хватает на все кластеры (решение владельца 26.10.2026, «минимум + главному»).
+
+    Сначала каждому кластеру — запас на MIN_DAYS дней, остаток — кластерам по убыванию продаж артикула
+    (главный регион первым) до полной потребности. Не хватает даже на минимум — выравниваем дни запаса.
+    """
+    base = {id(ln): min(ln.need, max(0, int(ln.speed * config.MIN_DAYS - ln.have))) if ln.speed else 0 for ln in group}
+    if sum(base.values()) <= free:
+        rest = free
+        for ln in group:
+            ln.qty = base[id(ln)]
+            rest -= ln.qty
+        for ln in sorted(group, key=lambda x: -x.speed):
+            add = min(rest, ln.need - ln.qty)
+            ln.qty += add
+            rest -= add
+        return
+    _equal_days(group, free)
+
+
+def _equal_days(group, free):
     """Делим свободный остаток так, чтобы дни запаса по складам выровнялись."""
     def total(t):
         return sum(min(ln.need, max(0, ln.speed * t - ln.have)) for ln in group)
@@ -615,7 +635,8 @@ def _fit(group, free):
             ln = max(group, key=lambda x: x.qty)
             ln.qty = max(0, ln.qty - over)
             continue
-        ln = max(cand, key=lambda x: ((x.have + x.qty) / x.speed if x.speed else 1e9, -_prio_rank(x.priority)))
+        # снимаем с кластера, где артикул продаётся меньше всего (главный регион — последним), среди равных — с самого обеспеченного
+        ln = min(cand, key=lambda x: (x.speed, -((x.have + x.qty) / x.speed if x.speed else 1e9), _prio_rank(x.priority)))
         name, s, k = min(ln.boxes, key=lambda b: b[1])
         ln.boxes = [(n, sz, c - 1 if (n, sz) == (name, s) else c) for n, sz, c in ln.boxes]
         ln.boxes = [b for b in ln.boxes if b[2] > 0]
