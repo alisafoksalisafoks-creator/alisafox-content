@@ -17,6 +17,7 @@ from bot.sources.performance import PerformanceClient
 
 TOP = "PLACEMENT_TOP_PROMOTION"
 MAX_CAMPS = 10  # кампаний в одном отчёте
+MIN_VIEWS = 100  # фразы с меньшим числом показов не показываем (владелец 2026-10-26)
 
 
 def ensure_tables(db):
@@ -151,7 +152,7 @@ def for_sku(db, perf, sku, start: date, end: date, today: date):
     phrases = db.execute(
         f"select query, sum(views) views, sum(clicks) clicks from ad_phrases "
         f"where start = ? and end = ? and sku = ? and campaign in ({tmarks}) group by lower(query) "
-        f"order by clicks desc, views desc", (*key, sku, *top)).fetchall()
+        f"having sum(views) >= {MIN_VIEWS} order by clicks desc, views desc", (*key, sku, *top)).fetchall()
     return {"campaigns": camps, "totals": dict(tot), "phrases": [dict(p) for p in phrases]}
 
 
