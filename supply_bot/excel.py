@@ -12,6 +12,13 @@ TOTAL = PatternFill("solid", fgColor="F2F2F2")
 PARTIAL_FILL = PatternFill("solid", fgColor="FFF2A8")
 STOP_FILL = PatternFill("solid", fgColor="EDEDED")
 STOP_FONT = Font(color="808080")
+DEMAND_FILL = {"опт": PatternFill("solid", fgColor="FFD8A8"), "всплеск": PatternFill("solid", fgColor="FFD8A8"),
+               "рост": PatternFill("solid", fgColor="C6EFCE")}   # опт и всплеск — оранжевый, рост спроса — зелёный
+
+
+def _paint(ws, fill):
+    for c in ws[ws.max_row]:
+        c.fill = fill
 
 
 def _sheet(wb, title, header, rows, widths=None):
@@ -44,11 +51,14 @@ def _distribution(wb, plan, groups):
                 for name, s, k in ln.boxes:
                     ws.append([wh, ln.cluster, ln.ship_to, ln.offer, s * k, name, s, k, plan.ship_date, ln.priority, "; ".join(ln.flags)])
                     if name.startswith(PARTIAL):  # неполный короб — вся строка жёлтая
-                        for c in ws[ws.max_row]:
-                            c.fill = PARTIAL_FILL
+                        _paint(ws, PARTIAL_FILL)
+                    elif ln.demand:
+                        _paint(ws, DEMAND_FILL[ln.demand])
             else:
                 ws.append([wh, ln.cluster, ln.ship_to, ln.offer, ln.qty, "нет кванта", None, None, plan.ship_date, ln.priority,
                            "; ".join(ln.flags)])
+                if ln.demand:
+                    _paint(ws, DEMAND_FILL[ln.demand])
         row = [f"Итого {wh}", "", "", f"{len(lines)} арт.", sum(x.qty for x in lines), "", "",
                sum(x.box_count for x in lines), "", "", ""]
         ws.append(row)
@@ -66,7 +76,7 @@ def _distribution(wb, plan, groups):
 
 def _need(wb, lines, title="Потребность по направлениям"):
     """Весь расчёт по строкам: из чего получилась потребность и сколько везём."""
-    _sheet(wb, title,
+    ws = _sheet(wb, title,
            ["Направление", "Кластер", "Артикул", "Отгрузки 14 дн", "Отгрузки 30 дн", "Коэф. сезона", "Скорость, шт/дн",
             "Доступно", "В пути", "Дней запаса", "Срок L, дн", "Потребность", "К отправке", "Коробов",
             "Короба", "Приоритет", "Пометки"],
@@ -74,6 +84,10 @@ def _need(wb, lines, title="Потребность по направлениям
              ln.available, ln.transit, round(ln.days, 1) if ln.days is not None else None, ln.lead, ln.need,
              ln.qty, ln.box_count, _boxes(ln), ln.priority, "; ".join(ln.flags)] for ln in lines],
            [28, 24, 26, 9, 9, 8, 9, 9, 8, 9, 8, 10, 10, 8, 34, 10, 44])
+    for i, ln in enumerate(lines, 2):
+        if ln.demand:
+            for c in ws[i]:
+                c.fill = DEMAND_FILL[ln.demand]
 
 
 def build_direction(plan, name, path, snap_time=""):
@@ -107,6 +121,12 @@ def build(plan, path, snap_time=""):
            [[x["cluster"], "ни одного нашего товара в кластере", None, x["warehouse"], None] for x in plan.empty_whole]
            + [[x["cluster"], x["offer"], x["sales14"], x["warehouse"], x["ff_free"]] for x in plan.empty_clusters],
            [26, 28, 14, 30, 12])
+
+    ws = _sheet(wb, "Опт и всплески", ["Артикул", "Что", "Как посчитано"],
+                [[x["offer"], x["kind"], x["text"]] for x in plan.demand_notes], [28, 10, 110])
+    for i, x in enumerate(plan.demand_notes, 2):
+        for c in ws[i]:
+            c.fill = DEMAND_FILL[x["kind"]]
 
     _sheet(wb, "Не попало в план", ["Артикул", "Направление", "Потребность", "Скорость, шт/дн", "Мин. короб", "Почему"],
            [[x["offer"], x["warehouse"], x["need"], round(x["speed"], 2), x["box"], x["why"]]
@@ -151,6 +171,10 @@ def build(plan, path, snap_time=""):
         ["Статусы", "таблица AlisaFox, лист «Юнит экономика Алиса», столбец «Статус ЗАЯВОК» (только чтение)"],
         ["Предупреждения", f"платное ≤ {config.PAID_SOON_DAYS} дн, выкуп < {config.BUYOUT_MIN:.0%}, "
                            f"рейтинг < {config.RATING_MIN}, сезон < {config.SEASON_LOW}"],
+        ["Опт и всплески", f"заказ от {config.WHOLESALE_MIN} шт одного артикула — опт, в спрос не идёт (оранжевый). "
+                           f"День больше {config.SPIKE_RATIO} × обычный (медиана {config.SALES_DAYS} дн) — всплеск, "
+                           "считаем как обычный день (оранжевый). 2 всплеска и больше за последние 7 дней — спрос растёт: "
+                           "считаем по факту, подсказка (зелёный)"],
         ["Сезонность", "коэффициенты по категории комиссии (тип товара), из «Программа формирования заявок на поставки», "
                        "лист «Коэффициент сезонности тех», сохранены в боте (supply_bot/season.tsv)"],
     ] + [["Сезон", f"{x['offer']} ({x['category']}): {x['k']} → {x['k_next']}"] for x in plan.season_notes]

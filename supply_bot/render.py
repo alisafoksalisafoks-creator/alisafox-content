@@ -7,6 +7,7 @@ from .sources.sheets import norm, root_of
 
 LIMIT = 3800
 ICON = {"срочно": "🔴", "наверх": "🟡", "обычно": "⚪"}
+DEMAND_ICON = {"опт": "🟧 ", "всплеск": "🟧 ", "рост": "📈 "}
 
 
 def fmt(n):
@@ -55,6 +56,12 @@ def summary(plan, taken_at=""):
         lines.append(f"Решить / стоп: {len(plan.decide)} арт.")
     if plan.paid:
         lines.append(f"Платное хранение ≤ 28 дн: {len(plan.paid)} арт. — не отгружаем.")
+    if plan.demand_notes:
+        n = {k: sum(1 for x in plan.demand_notes if x["kind"] == k) for k in ("опт", "всплеск", "рост")}
+        if n["опт"] or n["всплеск"]:
+            lines.append(f"🟧 Опт и всплески: {n['опт'] + n['всплеск']} арт. — опт в спрос не беру, всплеск считаю как обычный день.")
+        if n["рост"]:
+            lines.append(f"📈 Спрос растёт: {n['рост']} арт. — всплески чаще раза в неделю, считаю по факту.")
     if plan.season_notes:
         lines.append(f"Не сезон или спад сезона: {len(plan.season_notes)} арт.")
     if plan.no_season:
@@ -83,12 +90,14 @@ def warehouse(plan, name):
             "",
             "<b>Как считаю</b>: скорость = отгрузки кластера за 14 дн ÷ 14 × сезон. "
             f"Потребность = скорость × (срок L + {config.TARGET_DAYS}) − (доступно + в пути на Ozon). "
+            "Опт (заказ от 10 шт) в спрос не беру, разовый всплеск считаю как обычный день — 🟧; всплески чаще раза в неделю — 📈 спрос растёт. "
             "Везём в пределах нашего склада: полные короба; сверх короба от половины маленького короба — ещё короб; потребность меньше половины маленького короба — 🟨 неполный короб (до 10 шт вверх).", ""]
     rows = []
     for ln in sorted(items, key=lambda x: (-["обычно", "наверх", "срочно"].index(x.priority), -x.qty)):
         days = f"{ln.days:.0f} дн" if ln.days is not None else "—"
         flag = (" · " + escape("; ".join(ln.flags))) if ln.flags else ""
         part = "🟨 " if any(n.startswith("неполный") for n, _, _ in ln.boxes) else ""
+        part += DEMAND_ICON.get(ln.demand, "")
         rows.append(f"{ICON[ln.priority]} {part}<code>{escape(ln.offer)}</code> — <b>{fmt(ln.qty)}</b> шт ({_boxes(ln)}) · "
                     f"{ln.speed:.1f}/дн, запас {days}{flag}\n"
                     f"   {ln.sales14} шт за 14 дн → {ln.speed:.1f}/дн × ({ln.lead}+{config.TARGET_DAYS}) − "

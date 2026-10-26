@@ -11,7 +11,8 @@ CLUSTERS = {MSK1: "Москва, МО и Дальние регионы", MSK2: "
 
 
 def sales(offer, wh, per_day, days=14):
-    return [(str(TODAY - timedelta(days=i)), offer, "1", wh, per_day) for i in range(1, days + 1)]
+    """Обычные заказы по 1 шт: per_day заказов в день."""
+    return [(str(TODAY - timedelta(days=i)), offer, "1", wh, 1) for i in range(1, days + 1) for _ in range(per_day)]
 
 
 def unit(art, status="грузим", buyout=0.9, rating=4.9):
@@ -196,3 +197,22 @@ def test_season_file_shipped_with_code():
     assert season["Кабель для мобильных устройств"][11] == 1.08
     assert 7 not in season["Камера обзорная для автомобиля"]   # «нет данных» → коэф. 1
     assert len(season) == 43
+
+
+def test_wholesale_and_spikes():
+    day = lambda i: str(TODAY - timedelta(days=i))
+    usual = sales("OZ1", MSK1, 10)
+    # опт: один заказ 40 шт — в спрос не идёт
+    plan = calc.build(snap(usual + [(day(3), "OZ1", "1", MSK1, 40)], ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")}))
+    ln = plan.lines[0]
+    assert ln.sales14 == 140 and ln.demand == "опт" and "опт: 1 заказ(а) 40 шт" in ln.flags[0]
+    # разовый всплеск: +30 шт за день (40 при обычных 10) — считаем как обычный день
+    spike = [(day(9), "OZ1", "1", MSK1, 1)] * 30
+    plan = calc.build(snap(usual + spike, ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")}))
+    ln = plan.lines[0]
+    assert ln.sales14 == 140 and ln.demand == "всплеск" and plan.demand_notes[0]["kind"] == "всплеск"
+    # два всплеска за последнюю неделю — пошёл спрос: считаем по факту
+    grow = [(day(2), "OZ1", "1", MSK1, 1)] * 30 + [(day(5), "OZ1", "1", MSK1, 1)] * 30
+    plan = calc.build(snap(usual + grow, ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")}))
+    ln = plan.lines[0]
+    assert ln.sales14 == 200 and ln.demand == "рост" and "спрос растёт" in ln.flags[0]

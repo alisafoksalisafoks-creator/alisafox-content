@@ -6,6 +6,7 @@
 Дальше: статусы и стопы → лимит «Моего склада» с выравниванием дней запаса →
 полные моно-короба под каждое направление → пустые кластеры и предупреждения.
 """
+import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -51,6 +52,7 @@ class Line:
     flags: list = field(default_factory=list)
     manual: bool = False
     ship_to: str = ""         # склад приёмки — подсказка: наш основной склад кластера
+    demand: str = ""          # «опт», «всплеск» или «рост» — строку подсвечиваем
 
     @property
     def have(self):
@@ -81,6 +83,7 @@ class Plan:
     paid: list = field(default_factory=list)
     fbo_fbs: list = field(default_factory=list)
     season_notes: list = field(default_factory=list)
+    demand_notes: list = field(default_factory=list)  # [{offer, kind, text}] — опт, всплески, рост спроса
     no_season: list = field(default_factory=list)   # категория без коэффициента на этот месяц — считаем с 1
     duplicates: list = field(default_factory=list)
     ff: dict = field(default_factory=dict)          # {ключ МС: {article, stock, unshipped, free, used}}
@@ -104,6 +107,50 @@ def next_ship_date(today):
 
 def season_k(snap, category, month):
     return (snap.season.get(category) or {}).get(month, 1.0)
+
+
+def demand_spikes(rows, today):
+    """Опт и всплески по артикулу (решение владельца 26.10.2026).
+
+    rows: [(день, артикул, склад, шт)] — одна строка = один заказ.
+    Опт — заказ от WHOLESALE_MIN шт: в спрос не идёт, артикул подсвечиваем.
+    Всплеск — день за 14 дн больше SPIKE_RATIO × обычный день (медиана 14 дней): считаем его как обычный день.
+    Всплесков 2 и больше за последние 7 дней — пошёл спрос: всплески оставляем, подсказка «спрос растёт».
+    Возвращает ({(артикул, день): доля, которую оставляем}, {артикул: {kind, text}}).
+    """
+    days14 = [str(today - timedelta(days=i)) for i in range(config.SALES_DAYS, 0, -1)]
+    d7 = str(today - timedelta(days=7))
+    daily, opt = defaultdict(lambda: defaultdict(int)), defaultdict(list)
+    for day, offer, _wh, qty in rows:
+        if qty >= config.WHOLESALE_MIN:
+            if day >= days14[0]:
+                opt[offer].append((day, qty))
+        elif day >= days14[0]:
+            daily[offer][day] += qty
+    cut, out = {}, {}
+    for offer, by_day in daily.items():
+        usual = statistics.median(by_day.get(d, 0) for d in days14)
+        if usual < config.SPIKE_MIN_DAY:
+            continue
+        hot = [d for d in days14 if by_day.get(d, 0) > config.SPIKE_RATIO * usual]
+        if not hot:
+            continue
+        what = ", ".join(f"{by_day[d]} шт {d[8:10]}.{d[5:7]}" for d in hot)
+        if sum(d >= d7 for d in hot) >= 2:
+            out[offer] = {"kind": "рост", "text": f"спрос растёт: всплески {what} при обычном дне {usual:g} шт — "
+                                                  "считаю по факту, проверьте, не пора ли поднять закупку"}
+            continue
+        for d in hot:
+            cut[(offer, d)] = usual / by_day[d]
+        out[offer] = {"kind": "всплеск", "text": f"всплеск {what} — посчитан как обычный день {usual:g} шт"}
+    for offer, items in opt.items():
+        what = ", ".join(f"{q} шт {d[8:10]}.{d[5:7]}" for d, q in sorted(items))
+        text = f"опт: {len(items)} заказ(а) {what} — в спрос не взят"
+        if offer in out:
+            out[offer]["text"] = text + "; " + out[offer]["text"]
+        else:
+            out[offer] = {"kind": "опт", "text": text}
+    return cut, out
 
 
 def pick_boxes(qty, sizes, cap):
@@ -186,19 +233,20 @@ def build(snap, overrides=None):
 
     # --- спрос по складам ---
     d14, d30 = str(today - timedelta(days=config.SALES_DAYS)), str(today - timedelta(days=config.REF_DAYS))
-    s14, s30 = defaultdict(int), defaultdict(int)
+    rows = [(day, norm(offer), wh, qty) for day, offer, _sku, wh, qty in snap.postings
+            if day < str(today) and wh and wh not in foreign_wh]
+    cut, demand = demand_spikes(rows, today)
+    s14, s30 = defaultdict(float), defaultdict(int)
     wh_sales30 = defaultdict(int)
-    for day, offer, _sku, wh, qty in snap.postings:
-        if day >= str(today) or not wh:
+    for day, offer, wh, qty in rows:
+        if qty >= config.WHOLESALE_MIN:
             continue
-        if wh in foreign_wh:
-            continue
-        key = (norm(offer), wh)
+        key = (offer, wh)
         if day >= d30:
             s30[key] += qty
             wh_sales30[wh] += qty
         if day >= d14:
-            s14[key] += qty
+            s14[key] += qty * cut.get((offer, day), 1)
 
     stock = {}
     cluster_of = {w: cl for w, cl in snap.wh_cluster.items() if not config.foreign(cl)}
@@ -246,7 +294,7 @@ def build(snap, overrides=None):
     for offer in sorted(offers):
         name = offer_name.get(offer, offer)
         u = snap.unit.get(offer)
-        tot14 = sum(v for (o, _), v in s14.items() if o == offer)
+        tot14 = round(sum(v for (o, _), v in s14.items() if o == offer))
         info = {"offer": name, "sales14": tot14}
         if not u:
             if tot14:
@@ -294,7 +342,7 @@ def build(snap, overrides=None):
         eligible[offer] = {"u": u, "k": k, "key": key, "name": name}
 
     # --- направления: кластер целиком, в Москве — основные склады ---
-    s14c, s30c, stock_c = defaultdict(int), defaultdict(int), {}
+    s14c, s30c, stock_c = defaultdict(float), defaultdict(int), {}
     for (offer, wh), v in s14.items():
         if wh in cluster_of:
             s14c[(offer, cluster_of[wh])] += v
@@ -319,8 +367,16 @@ def build(snap, overrides=None):
         need = max(0, round(speed * (lead + config.TARGET_DAYS) - st["available"] - st["transit"]))
         lines[(offer, cl)] = Line(
             offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
-            sales14=s14c.get((offer, cl), 0), sales30=s30c.get((offer, cl), 0), speed=speed,
+            sales14=round(s14c.get((offer, cl), 0)), sales30=s30c.get((offer, cl), 0), speed=speed,
             available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"])
+
+    for (offer, _cl), ln in lines.items():
+        if offer in demand:
+            ln.demand = demand[offer]["kind"]
+            ln.flags.append(demand[offer]["text"])
+    for offer, d in sorted(demand.items()):
+        if offer in eligible:
+            plan.demand_notes.append({"offer": eligible[offer]["name"], **d})
 
     for ln in lines.values():
         if ln.days is not None and ln.days < ln.lead:
@@ -459,7 +515,7 @@ def build(snap, overrides=None):
     shop30 = sum(wh_sales30.values()) or 1
     cl_share = {cl: sum(q for q, _ in items) / shop30 for cl, items in by_cluster.items()}
     for offer, e in eligible.items():
-        tot14 = sum(v for (o, _), v in s14.items() if o == offer)
+        tot14 = round(sum(v for (o, _), v in s14.items() if o == offer))
         if tot14 / config.SALES_DAYS < config.HIT_MIN_PER_DAY or ms_by[e["key"]]["free"] <= 0:
             continue
         for cl in clusters:
