@@ -436,3 +436,183 @@ def morning_png(m, prefix):
 def service_label_short(name):
     from bot.morning import service_label
     return short(service_label(name), 44)
+
+
+POS_COLOR = {"up": GOOD, "down": BAD, "flat": MUTED, "none": MUTED}
+POS_NOTE = ("Средняя позиция в поиске и каталоге Ozon за день: чем меньше число, тем выше товар.\n"
+            "Зелёная ячейка — поднялся к предыдущему дню, красная — опустился. Справа — на сколько мест\n"
+            "изменилась позиция за период (▲ выше, ▼ ниже). Полные 28 дней — в Excel. Источник: Ozon Seller API.")
+
+
+def _pos(p):
+    return "—" if p is None else num(p)
+
+
+POS_UP, POS_DOWN = "#e3f4e3", "#fbe4e4"  # фон ячейки: поднялся / опустился к предыдущему дню
+
+
+def _cell(fig, x, y, w, h, color):
+    ax = fig.add_axes([x, y, w, h])
+    ax.set_facecolor(color)
+    ax.set_xticks([]), ax.set_yticks([])
+    for s in ax.spines.values():
+        s.set_visible(False)
+
+
+def _bg(cur, old, move):
+    kind = move(cur, old)[1]
+    return POS_UP if kind == "up" else POS_DOWN if kind == "down" else None
+
+
+def positions_matrix_png(title, subtitle, rows, days, move, prefix, per_sheet=16):
+    """Таблица-картинка: строка — артикул, столбцы — дни, в ячейке место.
+    rows: [{"offer_id", "name", "cells": [позиция за день до первого дня, затем по дням]}]."""
+    n = len(days)
+    x0, x1 = 0.05, 0.95
+    first = 0.30  # ширина столбца с артикулом
+    last = 0.10  # столбец «за период»
+    cw = (x1 - x0 - first - last) / n
+    chunks = [rows[i:i + per_sheet] for i in range(0, len(rows), per_sheet)][:4] or [[]]
+    paths = []
+    for k, part in enumerate(chunks):
+        rh = 0.46
+        p = Page(0.35 + 0.78 + 0.5 + rh * max(1, len(part)) + 0.75, SHEET_W)
+        p.header(f"{k + 1}/{len(chunks)} · {title}" if len(chunks) > 1 else title, subtitle)
+        hy = p.y - 0.2
+        p.fig.text(x0, hy / p.h, "Артикул", fontsize=8.5, color=MUTED)
+        for j, d in enumerate(days):
+            p.fig.text(x0 + first + cw * (j + 0.5), hy / p.h, f"{d:%d.%m}", fontsize=8, color=MUTED, ha="center")
+        p.fig.text(x1, hy / p.h, f"за {n} дн", fontsize=8, color=MUTED, ha="right")
+        p.y = hy - 0.12
+        for r in part:
+            p.y -= rh
+            y = p.y / p.h
+            cells = r["cells"]
+            for j in range(n):
+                cur, old = cells[j + 1], cells[j]
+                bg = _bg(cur, old, move)
+                if bg:
+                    _cell(p.fig, x0 + first + cw * j + 0.002, y + 0.03 / p.h, cw - 0.004, (rh - 0.06) / p.h, bg)
+                p.fig.text(x0 + first + cw * (j + 0.5), (p.y + rh / 2) / p.h, _pos(cur), fontsize=9,
+                           color=INK if cur is not None else MUTED, ha="center", va="center",
+                           fontweight="bold" if j == n - 1 else "normal")
+            p.fig.text(x0, (p.y + rh * 0.62) / p.h, short(r["offer_id"], 20), fontsize=9, fontweight="bold", color=INK,
+                       va="center")
+            p.fig.text(x0, (p.y + rh * 0.24) / p.h, short(r.get("name") or "", 34), fontsize=6.5, color=INK2,
+                       va="center")
+            lab, kind = move(cells[-1], next((c for c in cells[1:] if c is not None), None))
+            p.fig.text(x1, (p.y + rh / 2) / p.h, lab if kind != "none" else "—", fontsize=9, fontweight="bold",
+                       color=POS_COLOR[kind], ha="right", va="center")
+            p.fig.add_artist(plt.Line2D([x0, x1], [y] * 2, color=GRID, lw=0.5))
+        if not part:
+            p.y -= rh
+            p.fig.text(x0, p.y / p.h, "● нет данных о позициях", fontsize=9.5, color=MUTED)
+        path = f"{prefix}_{len(paths) + 1}.png"
+        p.footer(POS_NOTE)
+        p.save(path)
+        paths.append(path)
+    return paths
+
+
+def position_calendar_png(title, subtitle, cells, days, move, prefix):
+    """Артикул: таблица-календарь за 28 дней — неделя в строке, в ячейке дата и место."""
+    p = Page(0.35 + 0.78 + 0.45 + 4 * 0.72 + 0.75, SHEET_W)
+    p.header(short(title, 30), subtitle)
+    x0, x1 = 0.05, 0.95
+    cw = (x1 - x0) / 7
+    rh = 0.72
+    p.y -= 0.2
+    for w in range(len(days) // 7):
+        p.y -= rh
+        y = p.y / p.h
+        for j in range(7):
+            i = w * 7 + j
+            cur, old = cells[i + 1], cells[i]
+            _cell(p.fig, x0 + cw * j + 0.004, y + 0.04 / p.h, cw - 0.008, (rh - 0.08) / p.h,
+                  _bg(cur, old, move) or TILE)
+            cx = x0 + cw * (j + 0.5)
+            p.fig.text(cx, (p.y + rh * 0.72) / p.h, f"{days[i]:%d.%m}", fontsize=7.5, color=INK2, ha="center",
+                       va="center")
+            p.fig.text(cx, (p.y + rh * 0.36) / p.h, _pos(cur), fontsize=12, fontweight="bold",
+                       color=INK if cur is not None else MUTED, ha="center", va="center")
+    path = f"{prefix}_1.png"
+    p.footer("Средняя позиция в поиске и каталоге Ozon за день: чем меньше число, тем выше товар.\n"
+             "Зелёный — поднялся к предыдущему дню, красный — опустился, серый — изменение меньше 5%. "
+             "Источник: Ozon Seller API.")
+    p.save(path)
+    return [path]
+
+
+KW_NOTE = ("Место — средняя позиция в выдаче за период (Ozon, аналитика запросов), ▲ — поднялись выше к прошлому\n"
+           "такому же периоду. Заказы по запросу — реклама и органика вместе: Ozon их не делит. «РК» — запрос есть\n"
+           "в активной кампании «Вывод в топ».")
+KW_AD_NOTE = ("Только активные кампании. По фразам Ozon отдаёт показы и клики, расхода и заказов по фразе нет.\n"
+              "Заказы с рекламы — атрибуция Ozon по SKU, органика = все заказы − рекламные.")
+
+
+def _place(cur, prev, has_prev=True):
+    if cur is None:
+        return ("—", MUTED), ("", MUTED)
+    place = (f"{cur:.0f}", INK)
+    if prev is None and not has_prev:
+        return place, ("", MUTED)
+    if prev is None:
+        return place, ("нов.", MUTED)
+    d = round(prev) - round(cur)
+    if d == 0:
+        return place, ("≈", MUTED)
+    return place, (f"{'▲' if d > 0 else '▼'}{abs(d)}", GOOD if d > 0 else BAD)
+
+
+def keywords_png(data, prefix):
+    """«Ключи»: лист топ-15 запросов, для артикула ещё лист рекламных фраз. Возвращает пути PNG."""
+    period = f"Ozon · {data['start']:%d.%m}–{data['end']:%d.%m} · {data['days']} дн"
+    if data["kind"] == "s":
+        title = f"{data['offer_id']} · {short(data['name'] or '', 26)}"
+        tiles = [{"name": "Заказы всего, шт", "value": data["total_orders"], "plain": True},
+                 {"name": "С рекламы, шт", "value": data["ad_orders"], "plain": True},
+                 {"name": "Органика, шт", "value": data["organic_orders"], "plain": True}]
+    else:
+        title = short(data["name"], 30)
+        q_orders = sum(r["orders"] or 0 for r in data["rows"])
+        tiles = [{"name": "Заказы категории, шт", "value": data["total_orders"], "plain": True},
+                 {"name": "С топ-15 запросов, шт", "value": q_orders, "plain": True},
+                 {"name": "Артикулов", "value": data["n_skus"], "plain": True}]
+    cols = [(0.05, "Запрос", "left"), (0.62, "место", "right"), (0.72, "", "right"), (0.84, "заказы", "right"),
+            (0.95, "искали", "right")]
+    rows = []
+    has_prev = any(r["prev_position"] is not None for r in data["rows"])
+    for r in data["rows"]:
+        place, delta = _place(r["position"], r["prev_position"], has_prev)
+        bits = [f"{num(r['gmv'] or 0)} ₽"]
+        if data["kind"] == "s":
+            bits.append(f"конв. {r['conv'] or 0:.1f}%")
+            if not r["in_title"]:
+                bits.append("нет в названии")
+        else:
+            bits.append(f"лучше всех {r['best_offer']} (место {r['best_position']:.0f})" if r["best_position"] else "")
+            bits.append(f"{r['n_skus']} арт.")
+        if r.get("ad"):
+            bits.append("РК")
+        rows.append(([(short(r["query"], 30), INK, True), (place[0], place[1], True), (delta[0], delta[1], True),
+                      (num(r["orders"] or 0), INK, False), (num(r["searches"] or 0), INK2, False)],
+                     " · ".join(b for b in bits if b)))
+    paths = _sheets(title, period, "Топ-15 запросов", cols, rows, "● запросов за период нет", prefix + "_q",
+                    KW_NOTE + ("" if has_prev or not data["rows"] else
+                               f"\nСравнения с прошлыми {data['days']} дн пока нет: Ozon хранит запросы 35 дней, бот копит историю сам."),
+                    per_sheet=15, max_sheets=1, tiles=tiles)
+    if data["kind"] != "s":
+        return paths
+    ad_tiles = [{"name": "Расход РК, ₽", "value": data["ad_spent"], "plain": True},
+                {"name": "ДРР артикула, %", "value": data["drr"] or 0, "plain": True},
+                {"name": "Доля органики, %", "plain": True,
+                 "value": data["organic_orders"] / data["total_orders"] * 100 if data["total_orders"] else 0}]
+    cols = [(0.05, "Фраза в рекламе", "left"), (0.66, "показы", "right"), (0.81, "клики", "right"),
+            (0.95, "CTR", "right")]
+    rows = [([(short(x["query"], 32), INK, True), (num(x["views"]), INK, False), (num(x["clicks"]), INK, False),
+              (f"{x['clicks'] / x['views'] * 100:.1f}%" if x["views"] else "—", INK2, False)], "")
+            for x in data["phrases"][:15]]
+    camps = ", ".join(c[2] for c in data["campaigns"] if c[1] == "PLACEMENT_TOP_PROMOTION")
+    empty = "● нет активной кампании «Вывод в топ»" if not camps else "● фраз за период нет"
+    return paths + _sheets(title, period + (f" · {short(camps, 30)}" if camps else ""), "Запросы РК", cols, rows,
+                           empty, prefix + "_a", KW_AD_NOTE, per_sheet=15, max_sheets=1, tiles=ad_tiles)
