@@ -57,6 +57,9 @@ def summary(plan, taken_at=""):
         lines.append(f"Платное хранение ≤ 28 дн: {len(plan.paid)} арт. — не отгружаем.")
     if plan.season_notes:
         lines.append(f"Не сезон или спад сезона: {len(plan.season_notes)} арт.")
+    if plan.no_season:
+        lines.append(f"⚠️ Нет сезонности для категории: {len(plan.no_season)} арт., считаю с коэф. 1 — "
+                     + ", ".join(sorted({escape(x['category']) for x in plan.no_season})))
     no_box = sum(1 for x in plan.lines if x.qty and not x.boxes)
     if no_box:
         lines.append(f"⚠️ Нет кванта коробов: {no_box} строк, количество без округления.")

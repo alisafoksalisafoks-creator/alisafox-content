@@ -188,3 +188,11 @@ def test_box_rule_over_box_and_partial():
     assert calc.pack(8, [("E", 40)]) == ([], 0, 10)                    # неполный короб, вверх до 10
     assert calc.pack(6, [("F", 15)]) == ([], 0, 10)                    # от 5 шт — неполный короб
     assert calc.pack(4, [("G", 40)]) == ([], 4, 0)                     # меньше 5 шт — не везём
+
+
+def test_season_file_shipped_with_code():
+    from supply_bot import data
+    season = data.load_season()
+    assert season["Кабель для мобильных устройств"][11] == 1.08
+    assert 7 not in season["Камера обзорная для автомобиля"]   # «нет данных» → коэф. 1
+    assert len(season) == 43

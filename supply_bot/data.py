@@ -50,10 +50,14 @@ def load_season():
         parts = line.split("\t")
         if len(parts) < 13:
             continue
-        try:
-            out[parts[0].strip()] = {m: float(v.replace(",", ".")) for m, v in enumerate(parts[1:13], 1)}
-        except ValueError:
-            continue
+        months = {}
+        for m, v in enumerate(parts[1:13], 1):
+            try:
+                months[m] = float(v.replace(",", "."))
+            except ValueError:  # «нет данных» — в этом месяце коэффициент 1
+                pass
+        if months:
+            out[parts[0].strip()] = months
     return out
 
 

@@ -151,7 +151,10 @@ def build(plan, path, snap_time=""):
         ["Статусы", "таблица AlisaFox, лист «Юнит экономика Алиса», столбец «Статус ЗАЯВОК» (только чтение)"],
         ["Предупреждения", f"платное ≤ {config.PAID_SOON_DAYS} дн, выкуп < {config.BUYOUT_MIN:.0%}, "
                            f"рейтинг < {config.RATING_MIN}, сезон < {config.SEASON_LOW}"],
+        ["Сезонность", "коэффициенты по категории комиссии (тип товара), из «Программа формирования заявок на поставки», "
+                       "лист «Коэффициент сезонности тех», сохранены в боте (supply_bot/season.tsv)"],
     ] + [["Сезон", f"{x['offer']} ({x['category']}): {x['k']} → {x['k_next']}"] for x in plan.season_notes]
+      + [["Нет сезонности", f"{x['offer']} ({x['category']}): коэф. 1"] for x in plan.no_season]
       + [["Дубли", f"{x['root']}: {', '.join(x['offers'])}"] for x in plan.duplicates], [24, 90])
 
     wb.save(path)

@@ -81,6 +81,7 @@ class Plan:
     paid: list = field(default_factory=list)
     fbo_fbs: list = field(default_factory=list)
     season_notes: list = field(default_factory=list)
+    no_season: list = field(default_factory=list)   # категория без коэффициента на этот месяц — считаем с 1
     duplicates: list = field(default_factory=list)
     ff: dict = field(default_factory=dict)          # {ключ МС: {article, stock, unshipped, free, used}}
     notes: list = field(default_factory=list)
@@ -177,7 +178,8 @@ def build(snap, overrides=None):
     overrides = overrides or {}
     today = snap.today
     plan = Plan(today=today, ship_date=next_ship_date(today))
-    month = today.month
+    # сезон — месяц, когда поставка доедет и начнёт продаваться (в конце октября это уже ноябрь)
+    month = (plan.ship_date + timedelta(days=config.LEAD_DEFAULT)).month
 
     foreign_wh = {w for w, cl in snap.wh_cluster.items() if config.foreign(cl)} | \
         {r["warehouse"] for r in snap.wh_stocks if config.foreign(r.get("cluster"))}
@@ -284,6 +286,8 @@ def build(snap, overrides=None):
                 no_stock_k[offer] = {"u": u, "k": season_k(snap, u.get("category"), month), "name": name}
             continue
         k = season_k(snap, u.get("category"), month)
+        if snap.season and month not in (snap.season.get(u.get("category")) or {}):
+            plan.no_season.append({"offer": name, "category": u.get("category") or "категория не указана"})
         k_next = season_k(snap, u.get("category"), month % 12 + 1)
         if k < config.SEASON_LOW or (k and k_next < k * (1 - config.SEASON_DROP)):
             plan.season_notes.append({"offer": name, "category": u.get("category"), "k": k, "k_next": k_next})
