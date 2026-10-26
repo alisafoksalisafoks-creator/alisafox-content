@@ -13,6 +13,7 @@ import os
 import shutil
 import ssl
 import tempfile
+import threading
 import time
 from datetime import date, datetime, timedelta
 
@@ -56,12 +57,20 @@ def kb(rows):
 _fresh = {"day": None}
 
 
+_lock = threading.Lock()  # кнопки и понедельничная подготовка не качают данные одновременно
+
+
+def stale():
+    return (store.last_day(db) or date.min) < datetime.now(MSK).date() - timedelta(days=1)
+
+
 def ensure_fresh():
     """Данные собираются только по запросу (владелец 2026-10-26): при первом нажатии за день — докачка."""
-    today = datetime.now(MSK).date()
-    if _fresh["day"] != today and (store.last_day(db) or date.min) < today - timedelta(days=1):
-        refresh_data()
-    _fresh["day"] = today
+    with _lock:
+        today = datetime.now(MSK).date()
+        if _fresh["day"] != today and stale() or store.last_day(db) is None:
+            refresh_data()
+        _fresh["day"] = today
 
 
 def prepare():
@@ -492,6 +501,9 @@ async def button(cb: CallbackQuery):
     if not allowed(uid):
         return
     try:
+        if d != "menu" and not d.startswith("u") and d != "note" and (store.last_day(db) is None or stale()):
+            await msg.answer("Обновляю данные Ozon: копия у «Аналитика» и докачка. Первый раз 2–5 минут, потом быстрее…")
+            await asyncio.to_thread(ensure_fresh)
         if d == "menu":
             await msg.answer("Меню:", reply_markup=main_menu(uid))
         elif d.startswith("m:"):

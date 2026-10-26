@@ -72,7 +72,7 @@ def categories(db, skus):
     skus = list(skus) or [""]
     rows = db.execute(f"select s.type_id, s.type_name, s.sku, coalesce(sum(d.revenue), 0) r from sku s "
                       f"left join daily d on d.sku = s.sku and d.day >= ? where s.sku in {_in(skus)} "
-                      "group by s.sku", [str(store.last_day(db) - timedelta(days=27)), *skus]).fetchall()
+                      "group by s.sku", [str((store.last_day(db) or date.today()) - timedelta(days=27)), *skus]).fetchall()
     out = {}
     for tid, name, sku, rev in rows:
         c = out.setdefault(tid or "-", [name or "Без категории", [], 0.0])
