@@ -142,6 +142,12 @@ class TestScreens(unittest.TestCase):
                      "🔴 ▼ −2,7 п.п.", "от 2 шт −5%", "🟢 ▼ −2"):
             self.assertIn(part, text)
 
+    def test_dashboard_avg_price(self):
+        text = calc.dashboard(P, {"seller_price": 1742, "site_price": 1590,
+                                  "site_src": "средняя цена заказов сегодня, 3 шт", "soinvest": 8.7})
+        self.assertIn("средняя цена заказов сегодня, 3 шт: 1 590 ₽", text)
+        self.assertIn("≈8,7%", text)
+
     def test_dashboard_empty(self):
         text = calc.dashboard(P, {"ts_error": "ТС не подключён"})
         self.assertIn("нет данных из ТС", text)

@@ -126,14 +126,15 @@ def product(goods, pid):
     return next((g for g in goods if g["product_id"] == pid), None)
 
 
-async def positions(day):
-    async def load():
+async def analytics(name, day, load):
+    """Запрос аналитики Ozon: по одному за раз и не чаще раза в минуту. Кэш на час."""
+    async def run():
         async with ozon_lock:
             try:
-                return await ozon.positions(day.isoformat())
+                return await load(day.isoformat())
             finally:
                 await asyncio.sleep(61)  # следующий запрос аналитики — не раньше чем через минуту
-    return await cached(f"pos:{day}", 3600, load)
+    return await cached(f"{name}:{day}", 3600, run)
 
 
 async def collect(p):
@@ -157,6 +158,13 @@ async def collect(p):
         d["commission"] = pr["sale_percent"] + acq
     acts = res["actions"] if isinstance(res["actions"], dict) else {"elastic": {}, "site": {}}
     d["site_price"] = acts["site"].get(pid)
+    if not d["site_price"]:
+        # товара нет в акциях — цены с картой по API нет; берём среднюю цену заказов из аналитики Ozon
+        for day, label in ((today(), "сегодня"), (today() - dt.timedelta(days=1), "вчера")):
+            s = store.snapshot(day.isoformat()).get(sku, {})
+            if s.get("avg_price"):
+                d["site_price"], d["site_src"] = s["avg_price"], f"средняя цена заказов {label}, {s['avg_units']} шт"
+                break
     d["soinvest"] = calc.soinvest(d.get("seller_price"), d.get("site_price"))
     d["elastic"] = acts["elastic"].get(pid)
     d["actions_errors"] = len(acts.get("errors") or [])
@@ -576,28 +584,45 @@ def cancel_kb(back):
 # --- снимки на каждый день: соинвест и место в выдаче ---
 
 async def daily_snapshots():
-    """Каждые 3 часа сохраняет соинвест и место в выдаче по всем SKU — для сравнения «сегодня / вчера»."""
+    """Каждые 3 часа сохраняет соинвест, среднюю цену заказов и место в выдаче по всем SKU — для «сегодня / вчера».
+
+    Без Premium Plus у Ozon 50 запросов аналитики в сутки: тут до 4 за проход, 8 проходов — до 32.
+    """
     while True:
         try:
             goods = await items()
-            day = today()
+            day, y = today(), today() - dt.timedelta(days=1)
             prices = await ozon.prices([g["product_id"] for g in goods])
             site = (await cached("actions", 1800, ozon.actions))["site"]
+            avg = await safe(analytics("avg", day, ozon.avg_prices))
+            if not any("avg_price" in v for v in store.snapshot(y.isoformat()).values()):
+                ya = await safe(analytics("avg", y, ozon.avg_prices))
+                store.save_snapshot(y.isoformat(), {sku: {"avg_price": a, "avg_units": n} for sku, (a, n) in ya.items()})
             values = {}
             for g in goods:
+                a, n = avg.get(g["sku"], (None, None))
                 si = calc.soinvest((prices.get(g["product_id"]) or {}).get("seller_price"),
-                                   site.get(g["product_id"]))
-                values[g["sku"]] = {"soinvest": si}
-            for sku, pos in (await positions(day)).items():
+                                   site.get(g["product_id"]) or a)
+                values[g["sku"]] = {"soinvest": si, "avg_price": a, "avg_units": n}
+            for sku, pos in (await safe(analytics("pos", day, ozon.positions))).items():
                 values.setdefault(sku, {})["position"] = pos
             store.save_snapshot(day.isoformat(), values)
             # аналитика Ozon за сегодня может быть ещё пустой — держим и вчерашнее место
-            y = day - dt.timedelta(days=1)
-            store.save_snapshot(y.isoformat(), {sku: {"position": pos} for sku, pos in (await positions(y)).items()})
-            log.info("снимок за %s: %s SKU", day, len(values))
+            store.save_snapshot(y.isoformat(), {sku: {"position": pos} for sku, pos in
+                                                (await safe(analytics("pos", y, ozon.positions))).items()})
+            log.info("снимок за %s: %s SKU, средняя цена заказов у %s", day, len(values), len(avg))
         except Exception:
             log.exception("снимок не удался")
         await asyncio.sleep(3 * 3600)
+
+
+async def safe(coro):
+    """Аналитика Ozon может отказать (лимит, нет Premium Plus для позиции) — тогда пусто, остальное считаем."""
+    try:
+        return await coro
+    except Exception as e:
+        log.warning("аналитика Ozon: %s", e)
+        return {}
 
 
 # --- обработчики ---

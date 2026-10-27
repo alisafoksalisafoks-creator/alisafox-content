@@ -124,6 +124,13 @@ class TestOzon(unittest.TestCase):
         self.assertEqual(_card_price({"price": {"amount": "837"}}), 837.0)
         self.assertIsNone(_card_price(None))
 
+    def test_avg_prices_from_analytics(self):
+        o = Fake({"/v1/analytics/data": {"result": {"data": [
+            {"dimensions": [{"id": "5"}], "metrics": [4770, 3]},
+            {"dimensions": [{"id": "6"}], "metrics": [0, 0]}]}}})
+        self.assertEqual(run(o.avg_prices("2026-10-27")), {5: (1590.0, 3)})
+        self.assertEqual(o.sent[0][1]["metrics"], ["revenue", "ordered_units"])
+
     def test_set_price_errors(self):
         o = Fake({"/v1/product/import/prices": {"result": [{"updated": False, "errors": [{"message": "old_price"}]}]}})
         self.assertEqual(run(o.set_price("OZ214", 1290)), ["old_price"])

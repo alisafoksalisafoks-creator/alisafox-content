@@ -265,21 +265,35 @@ class Ozon:
 
     # --- позиция в выдаче ---
 
-    async def positions(self, day):
-        """{sku: средняя позиция в поиске и категории за день}. Метод Ozon — не чаще 1 раза в минуту."""
+    async def analytics(self, day, metrics):
+        """{sku: [значения метрик]} за день. Метод Ozon — не чаще 1 раза в минуту, без Premium Plus — 50 раз в сутки
+        и только revenue / ordered_units; position_category — с Premium Plus."""
         out, offset = {}, 0
         while True:
-            r = await self.call("/v1/analytics/data", {"date_from": day, "date_to": day, "metrics": ["position_category"],
+            r = await self.call("/v1/analytics/data", {"date_from": day, "date_to": day, "metrics": metrics,
                                                        "dimension": ["sku"], "limit": 1000, "offset": offset})
             data = (r.get("result") or {}).get("data", [])
             for row in data:
-                pos = row["metrics"][0]
-                if pos:
-                    out[int(row["dimensions"][0]["id"])] = pos
+                out[int(row["dimensions"][0]["id"])] = row["metrics"]
             if len(data) < 1000:
                 return out
             offset += 1000
             await asyncio.sleep(61)
+
+    async def positions(self, day):
+        """{sku: средняя позиция в поиске и категории за день}."""
+        return {sku: m[0] for sku, m in (await self.analytics(day, ["position_category"])).items() if m and m[0]}
+
+    async def avg_prices(self, day):
+        """{sku: (средняя цена заказа, шт)} за день = «Заказано на сумму» / «Заказано товаров» из аналитики Ozon.
+
+        Это цена, по которой покупатели реально заказали: с картой и без, со скидкой от количества и акциями.
+        """
+        out = {}
+        for sku, m in (await self.analytics(day, ["revenue", "ordered_units"])).items():
+            if len(m) >= 2 and m[0] and m[1]:
+                out[sku] = (round(m[0] / m[1], 2), int(m[1]))
+        return out
 
     async def close(self):
         if self._session:
