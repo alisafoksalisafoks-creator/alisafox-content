@@ -68,6 +68,18 @@ class TestOzon(unittest.TestCase):
         self.assertEqual((el[10]["min_el"], el[10]["max_el"], el[10]["in_action"], el[10]["boost"]),
                          (351.0, 221.0, True, 12))
 
+    def test_elastic_action_beats_other_boost(self):
+        # товар участвует в другом «…бустинге» с ценой 760, а в «Эластичном» — кандидат с вилкой 637 / 539
+        other = {"id": 10, "price_min_elastic": 760, "price_max_elastic": 760}
+        el = {"id": 10, "price_min_elastic": 637, "price_max_elastic": 539}
+        o = Fake({"/v1/actions": {"result": [{"id": 1, "title": "Максимальный бустинг"},
+                                             {"id": 2, "title": "Эластичный бустинг"}]},
+                  "/v2/actions/products": lambda b: {"products": [other] if b["action_id"] == 1 else []},
+                  "/v2/actions/candidates": lambda b: {"products": [el] if b["action_id"] == 2 else []}})
+        e = run(o.actions())["elastic"][10]
+        self.assertEqual((e["action"], e["min_el"], e["max_el"], e["in_action"]),
+                         ("Эластичный бустинг", 637.0, 539.0, False))
+
     def test_set_price_errors(self):
         o = Fake({"/v1/product/import/prices": {"result": [{"updated": False, "errors": [{"message": "old_price"}]}]}})
         self.assertEqual(run(o.set_price("OZ214", 1290)), ["old_price"])

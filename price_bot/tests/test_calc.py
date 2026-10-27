@@ -94,8 +94,9 @@ class TestBoost(unittest.TestCase):
 
     def test_need_lower(self):
         lines = calc.boost_hint(365, self.EL)
-        self.assertIn("снизьте на 14 ₽", lines[0])
-        self.assertIn("снизьте на 144 ₽", lines[1])
+        self.assertIn("пока не участвуете", lines[0])
+        self.assertIn("снизьте на 14 ₽", lines[1])
+        self.assertIn("снизьте на 144 ₽", lines[2])
 
     def test_already_in(self):
         lines = calc.boost_hint(300, dict(self.EL, in_action=True, boost=12))

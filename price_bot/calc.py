@@ -62,12 +62,13 @@ def boost_hint(price, el):
     """Строки про «Эластичный бустинг»: сколько снизить до входа в акцию и до максимального бустинга."""
     if not el:
         return ["🎯 Бустинг: товара нет в акциях «Эластичный бустинг»"]
-    lines = []
     if el.get("in_action"):
         b = f", бустинг {pct(el['boost'])}" if el.get("boost") is not None else ""
-        lines.append(f"✅ В акции «{html.escape(el['action'])}»{b}")
-    for title, limit in (("🎯 Вход в акцию (мин. бустинг)", el.get("min_el")),
-                         ("🚀 Макс. бустинг", el.get("max_el"))):
+        lines = [f"✅ В акции «{html.escape(el['action'])}»{b}"]
+    else:
+        lines = [f"🎯 Акция «{html.escape(el['action'])}» (пока не участвуете):"]
+    for title, limit in (("   вход (мин. бустинг)", el.get("min_el")),
+                         ("   макс. бустинг", el.get("max_el"))):
         if not limit:
             continue
         if price and price > limit:

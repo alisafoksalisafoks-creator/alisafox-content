@@ -176,12 +176,15 @@ class Ozon:
                         if not boost or (not lo and not hi):
                             continue
                         prev = elastic.get(p["id"])
-                        if prev and prev["in_action"] and not inside:
-                            continue  # уже нашли товар участником, кандидатство не важнее
+                        rank = ("эластичн" in a.get("title", "").lower(), inside)  # шаблон цен = «Эластичный бустинг»
+                        if prev and prev["rank"] >= rank:
+                            continue
                         elastic[p["id"]] = {"action": a.get("title"), "min_el": lo, "max_el": hi, "in_action": inside,
                                             "boost": p.get("current_boost"), "min_boost": p.get("min_boost"),
                                             "max_boost": p.get("max_boost"),
-                                            "action_price": _money(p.get("action_price"))}
+                                            "action_price": _money(p.get("action_price")), "rank": rank}
+                        log.debug("бустинг %s, товар %s: min %s, max %s, участник %s", a.get("title"), p["id"],
+                                 lo, hi, inside)
                     last = r.get("last_id")
                     if not last or not r.get("products"):
                         break
