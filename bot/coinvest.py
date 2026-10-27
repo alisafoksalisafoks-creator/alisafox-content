@@ -73,7 +73,7 @@ def _sums(db, start, stop, by):
     return out
 
 
-def table(db, end, by="type", type_id=None):
+def table(db, end, by="type", type_id=None, period="7 дней"):
     """Строки: ключ, продажи, соинвест и изменение в п.п. по периодам. Для by='sku' — только товары категории type_id."""
     rows = {}
     for name, cur, prev in periods(end):
@@ -83,7 +83,7 @@ def table(db, end, by="type", type_id=None):
             p, b = pct(seller, buyer), before.get(k)
             r[name] = {"pct": p, "qty": qty, "seller": seller, "buyer": buyer,
                        "delta": p - pct(b[1], b[2]) if b and b[1] and p is not None else None}
-            if name == "7 дней":
+            if name == period:
                 r["qty"], r["seller"] = qty, seller
     out = list(rows.values())
     if by == "sku":
@@ -94,7 +94,7 @@ def table(db, end, by="type", type_id=None):
                        (r["key"],)).fetchone()
         r["name"] = (s["type_name"] if by == "type" else s["name"]) if s else "Без категории"
         r["offer_id"] = s["offer_id"] if s and by == "sku" else None
-    return sorted(out, key=lambda r: -r["seller"])
+    return sorted((r for r in out if r.get(period)), key=lambda r: -r["seller"])
 
 
 def daily(db, sku, end, days=14):

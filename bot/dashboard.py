@@ -342,32 +342,36 @@ def _pct(x):
     return f"{x:.0f}%" if x is not None else "—"
 
 
-def coinvest_png(title, subtitle, rows, prefix, by="type"):
-    """Соинвест по категориям или артикулам категории: вчера к позавчера и 7 дней к прошлым 7."""
-    cols = [(0.05, "Категория" if by == "type" else "Товар", "left"), (0.52, "вчера", "right"),
-            (0.68, "к позавч.", "right"), (0.80, "7 дн", "right"), (0.95, "к пр. 7", "right")]
+def coinvest_png(title, subtitle, rows, period, prefix, by="type"):
+    """Соинвест за выбранный период (Вчера / 7 дней) по категориям или артикулам категории."""
+    base = "к позавч." if period == "Вчера" else "к пр. 7 дн"
+    cols = [(0.05, "Категория" if by == "type" else "Товар", "left"), (0.58, "продано", "right"),
+            (0.76, "соинвест", "right"), (0.95, base, "right")]
     out = []
     for r in rows:
-        y, w = r.get("Вчера") or {}, r.get("7 дней") or {}
+        x = r.get(period) or {}
         label = short(r["name"], 30) if by == "type" else (r["offer_id"] or r["key"])
-        sub = (f"{num(r['qty'])} шт за 7 дн" + ("" if by == "type" else f" · {short(r['name'], 44)}"))
-        out.append(([(label, INK, True), (_pct(y.get("pct")), INK, True), (*pp_style(y.get("delta")), True),
-                     (_pct(w.get("pct")), INK, True), (*pp_style(w.get("delta")), True)], sub))
+        sub = "" if by == "type" else short(r["name"], 60)
+        out.append(([(label, INK, True), (f"{num(x.get('qty', 0))} шт", INK, False), (_pct(x.get("pct")), INK, True),
+                     (*pp_style(x.get("delta")), True)], sub))
     return _sheets(title, subtitle, "Соинвест Ozon, % от нашей цены · изменение в п.п.", cols, out,
                    "● продаж нет", prefix, COINVEST_NOTE, per_sheet=16)
 
 
-def coinvest_sku_png(r, days, end, prefix):
-    """Соинвест артикула: плитки вчера и 7 дней, таблица по дням."""
-    y, w = r.get("Вчера") or {}, r.get("7 дней") or {}
-    tiles = [{"name": "Соинвест вчера, %", "value": y.get("pct") or 0, "label": pp_style(y.get("delta"))},
-             {"name": "Соинвест 7 дней, %", "value": w.get("pct") or 0, "label": pp_style(w.get("delta"))}]
+def coinvest_sku_png(r, period, days, prefix):
+    """Соинвест артикула за выбранный период и цены по дням за 2 недели."""
+    x = r.get(period) or {}
+    base = "к позавчера" if period == "Вчера" else "к прошлым 7 дням"
+    tiles = [{"name": f"Соинвест {period.lower()}, %", "value": x.get("pct") or 0, "label": pp_style(x.get("delta"))},
+             {"name": "Наша цена, ₽/шт", "value": x["seller"] / x["qty"] if x.get("qty") else 0, "plain": True},
+             {"name": "Покупатель, ₽/шт", "value": x["buyer"] / x["qty"] if x.get("qty") else 0, "plain": True}]
     cols = [(0.05, "День", "left"), (0.30, "шт", "right"), (0.52, "наша цена", "right"), (0.75, "покупатель", "right"),
             (0.95, "соинвест", "right")]
-    rows = [([(f"{date.fromisoformat(d):%d.%m}", INK, True), (num(q), INK, False), (num(s), INK, False),
-              (num(b), INK, False), (_pct(p), INK, True)], "") for d, q, s, b, p in days]
-    return _sheets(short(r["offer_id"] or r["key"], 28), short(r["name"], 60), "Цена за 1 шт по дням продаж", cols, rows,
-                   "● продаж за 2 недели нет", prefix, COINVEST_NOTE, per_sheet=14, tiles=tiles)
+    rows = [([(f"{date.fromisoformat(d):%d.%m}", INK, True), (num(q), INK, False), (num(s_), INK, False),
+              (num(b_), INK, False), (_pct(p_), INK, True)], "") for d, q, s_, b_, p_ in days]
+    return _sheets(short(r["offer_id"] or r["key"], 28), f"{short(r['name'], 40)} · {period.lower()} {base}",
+                   "Цена за 1 шт по дням продаж", cols, rows, "● продаж за 2 недели нет", prefix, COINVEST_NOTE,
+                   per_sheet=14, tiles=tiles)
 
 
 def _chg(cur, old):

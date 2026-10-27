@@ -445,8 +445,12 @@ async def coinvest_end(msg: Message):
     return date.fromisoformat(day) if day else None
 
 
-def coinvest_sub(end):
-    return f"Ozon · вчера = {end:%d.%m} к {end - timedelta(days=1):%d.%m} · 7 дн к прошлым 7"
+COINVEST_PERIODS = {"y": "Вчера", "w": "7 дней"}
+
+
+def coinvest_sub(end, k):
+    return (f"Ozon · {end:%d.%m} к {end - timedelta(days=1):%d.%m}" if k == "y"
+            else f"Ozon · {end - timedelta(days=6):%d.%m}–{end:%d.%m} к прошлым 7 дням")
 
 
 def pp_label(x):
@@ -454,38 +458,43 @@ def pp_label(x):
     return ("—" if p is None else f"{p:.0f}%") + ("" if d is None else f" {'▲' if d >= 0.5 else '▼' if d <= -0.5 else '≈'}{d:+.1f}")
 
 
-async def coinvest_menu(msg: Message):
+async def coinvest_categories(msg: Message, k):
     end = await coinvest_end(msg)
     if not end:
         return await msg.answer("Ozon пока не отдал отчёты о реализации. Попробуйте позже.", reply_markup=MENU)
-    rows = coinvest.table(db, end, "type")
-    await send_png(msg, lambda p: dashboard.coinvest_png("Соинвест по категориям", coinvest_sub(end), rows, p),
-                   "Соинвест Ozon по категориям")
-    await msg.answer("Выберите категорию — покажу артикулы (вчера · к позавчера):", reply_markup=kb(
-        [[(f"{dashboard.short(r['name'], 24)} · {pp_label(r.get('Вчера') or {})}", f"co:c:{r['key']}")]
-         for r in rows[:40] if r["key"] != "-"] + [[("⬅️ Меню", "menu")]]))
+    period = COINVEST_PERIODS[k]
+    rows = coinvest.table(db, end, "type", period=period)
+    await send_png(msg, lambda p: dashboard.coinvest_png(f"Соинвест · {period.lower()}", coinvest_sub(end, k), rows,
+                                                        period, p), f"Соинвест по категориям · {period.lower()}")
+    await msg.answer("Выберите категорию:", reply_markup=kb(
+        [[(f"{dashboard.short(r['name'], 24)} · {pp_label(r[period])}", f"co:{k}:c:{r['key']}")]
+         for r in rows[:40] if r["key"] != "-"] + [[("⬅️ Соинвест", f"co:p:{k}"), ("⬅️ Меню", "menu")]]))
 
 
-async def coinvest_category(msg: Message, type_id):
+async def coinvest_category(msg: Message, k, type_id):
     end = await coinvest_end(msg)
-    rows = coinvest.table(db, end, "sku", type_id)
+    period = COINVEST_PERIODS[k]
+    rows = coinvest.table(db, end, "sku", type_id, period=period)
     name = db.execute("select type_name from sku where type_id = ? limit 1", (type_id,)).fetchone()
     title = dashboard.short(name[0] if name else "Категория", 30)
-    await send_png(msg, lambda p: dashboard.coinvest_png(title, coinvest_sub(end), rows, p, by="sku"), f"Соинвест: {title}")
+    await send_png(msg, lambda p: dashboard.coinvest_png(title, coinvest_sub(end, k), rows, period, p, by="sku"),
+                   f"Соинвест: {title} · {period.lower()}")
     await msg.answer("Нажмите на артикул — покажу по дням:", reply_markup=kb(
-        [[(f"{(r['offer_id'] or r['key'])[:20]} · {pp_label(r.get('Вчера') or {})}", f"co:s:{r['key']}")]
-         for r in rows[:40]] + [[("⬅️ Категории", "co"), ("⬅️ Меню", "menu")]]))
+        [[(f"{(r['offer_id'] or r['key'])[:20]} · {pp_label(r[period])}", f"co:{k}:s:{r['key']}")]
+         for r in rows[:40]] + [[("⬅️ Категории", f"co:{k}:c"), ("⬅️ Меню", "menu")]]))
 
 
-async def coinvest_sku(msg: Message, sku):
+async def coinvest_sku(msg: Message, k, sku):
     end = await coinvest_end(msg)
+    period = COINVEST_PERIODS[k]
     tid = db.execute("select type_id from sku where sku = ?", (sku,)).fetchone()
-    r = next((x for x in coinvest.table(db, end, "sku", tid[0] if tid else None) if x["key"] == sku), None)
+    r = next((x for x in coinvest.table(db, end, "sku", tid[0] if tid else None, period=period) if x["key"] == sku), None)
     if not r:
-        return await msg.answer("По этому артикулу продаж за 2 недели нет.", reply_markup=MENU)
-    await send_png(msg, lambda p: dashboard.coinvest_sku_png(r, coinvest.daily(db, sku, end), end, p),
-                   f"Соинвест: {r['offer_id'] or sku}", kb([[("⬅️ Категория", f"co:c:{tid[0]}" if tid else "co"),
-                                                             ("⬅️ Меню", "menu")]]))
+        return await msg.answer(f"У этого артикула нет продаж за период «{period.lower()}».",
+                                reply_markup=kb([[("⬅️ Соинвест", f"co:p:{k}"), ("⬅️ Меню", "menu")]]))
+    await send_png(msg, lambda p: dashboard.coinvest_sku_png(r, period, coinvest.daily(db, sku, end), p),
+                   f"Соинвест: {r['offer_id'] or sku} · {period.lower()}",
+                   kb([[("⬅️ Категория", f"co:{k}:c:{tid[0]}" if tid else f"co:p:{k}"), ("⬅️ Меню", "menu")]]))
 
 
 def render_morning(prefix):
@@ -563,11 +572,21 @@ async def on_button(cb: CallbackQuery):
         waiting[cb.from_user.id] = "card"
         await msg.answer("Пришлите артикул (например OZ353NEW2) или SKU Ozon.")
     elif d == "co":
-        await coinvest_menu(msg)
-    elif d.startswith("co:c:"):
-        await coinvest_category(msg, d[5:])
-    elif d.startswith("co:s:"):
-        await coinvest_sku(msg, d[5:])
+        await msg.answer("Соинвест Ozon: за какой период?", reply_markup=kb(
+            [[("Вчера (к позавчера)", "co:p:y")], [("7 дней (к прошлым 7)", "co:p:w")], [("⬅️ Меню", "menu")]]))
+    elif d.startswith("co:p:"):
+        k = d[5:]
+        await msg.answer(f"Соинвест · {COINVEST_PERIODS[k].lower()}. Что смотрим?", reply_markup=kb(
+            [[("📂 Категории", f"co:{k}:c"), ("🔎 Артикул", f"co:{k}:a")], [("⬅️ Период", "co"), ("⬅️ Меню", "menu")]]))
+    elif re.fullmatch(r"co:[yw]:c", d):
+        await coinvest_categories(msg, d[3])
+    elif d.startswith(("co:y:c:", "co:w:c:")):
+        await coinvest_category(msg, d[3], d[7:])
+    elif d.startswith(("co:y:s:", "co:w:s:")):
+        await coinvest_sku(msg, d[3], d[7:])
+    elif re.fullmatch(r"co:[yw]:a", d):
+        waiting[cb.from_user.id] = f"co:{d[3]}"
+        await msg.answer("Пришлите артикул (например OZ214) или SKU Ozon.")
     elif d == "neg":
         await losses_menu(msg)
     elif d.startswith("neg:c:"):
@@ -783,6 +802,8 @@ async def on_text(msg: Message):
     if not s:
         return await msg.answer("Не нашёл такой артикул в продажах за 120 дней. Проверьте код.", reply_markup=MENU)
     mode = waiting.pop(msg.from_user.id, "card")
+    if mode.startswith("co:"):
+        return await coinvest_sku(msg, mode[3], s["sku"])
     if mode == "signals":
         return await signal_sku(msg, s["sku"])
     if mode == "pos":
