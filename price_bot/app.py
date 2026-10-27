@@ -584,9 +584,9 @@ def cancel_kb(back):
 # --- снимки на каждый день: соинвест и место в выдаче ---
 
 async def daily_snapshots():
-    """Каждые 3 часа сохраняет соинвест, среднюю цену заказов и место в выдаче по всем SKU — для «сегодня / вчера».
+    """Каждый час сохраняет соинвест, среднюю цену заказов и место в выдаче по всем SKU — для «сегодня / вчера».
 
-    Без Premium Plus у Ozon 50 запросов аналитики в сутки: тут до 4 за проход, 8 проходов — до 32.
+    У AlisaFox Premium Plus: лимита 50 запросов аналитики в сутки нет, место в выдаче доступно.
     """
     while True:
         try:
@@ -613,7 +613,7 @@ async def daily_snapshots():
             log.info("снимок за %s: %s SKU, средняя цена заказов у %s", day, len(values), len(avg))
         except Exception:
             log.exception("снимок не удался")
-        await asyncio.sleep(3 * 3600)
+        await asyncio.sleep(3600)
 
 
 async def safe(coro):
