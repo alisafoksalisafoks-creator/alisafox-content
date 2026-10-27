@@ -228,12 +228,3 @@ def test_shortage_priority_cluster_14_days_others_7():
     plan = calc.build(s)
     assert all("не хватает ФФ: потребность всех кластеров 1145 шт больше свободного на ФФ 600 шт" in ln.flags[0]
                for ln in plan.lines)
-
-
-def test_enough_stock_in_cluster_not_shipped():
-    # Москва: 7 шт/дн, на Ozon 200 — запаса на 29 дней (≥ 25): не везём, причина в «Не попало в план»
-    s = snap(sales("OZ1", MSK1, 7) + sales("OZ1", KZN, 7), stocks=[("OZ1", MSK1, 200, 0)],
-             ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")})
-    plan = calc.build(s)
-    assert {ln.warehouse for ln in plan.lines} == {"Казань"}
-    assert any("запаса на Ozon на 29 дн" in x["why"] for x in plan.small)

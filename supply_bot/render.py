@@ -128,8 +128,7 @@ def offer(plan, query, snap_unit=None):
             ff = next((r for r in plan.ff.values() if norm(r["article"]) in (q, root_of(q))), None)
             free = f"свободно у нас {fmt(ff['free'] - ff['used'])} шт" if ff else ""
             rows = [f"<code>{escape(query)}</code>: потребность есть, но в план не попала. {free}"]
-            rows += [f"  {escape(x['warehouse'])} — нужно {fmt(x['need'])}"
-                     + (f", короб {x['box']}" if x["box"] else "") + f" · {x['why']}"
+            rows += [f"  {escape(x['warehouse'])} — нужно {fmt(x['need'])}, короб {x['box'] or 'нет кванта'} · {x['why']}"
                      for x in sorted(small, key=lambda x: -x["need"])[:25]]
             if len(small) > 25:
                 rows.append(f"  … ещё {len(small) - 25} направлений в файле")
