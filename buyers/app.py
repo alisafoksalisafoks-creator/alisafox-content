@@ -98,7 +98,7 @@ def who_is(u):
 # --- меню ---
 
 def main_menu(uid):
-    rows = [[("👥 Покупатели", "b")], [("➕ Добавить ID покупателя", "add"), ("✏️ Редактировать", "e")]]
+    rows = [[("🛒 Выкупы сегодня", "v:all:today:q"), ("👥 Покупатели", "b")], [("➕ Добавить ID покупателя", "add"), ("✏️ Редактировать", "e")]]
     if is_admin(uid):
         rows.append([("👤 Добавить пользователя в бот", "u")])
     return kb(rows)
@@ -154,10 +154,14 @@ def build(who, kind, view, prefix):
         return keys_report(name, lines, start, end, prefix)
     if view == "q" and who == "all":
         q = report.by_buyer(lines, ids)
-        rows = [[short(store.buyer_name(db, b), 30), str(b), n] for b, n in sorted(q.items(), key=lambda t: -t[1])]
+        rows = [[short(store.buyer_name(db, b), 30), str(b), n]
+                for b, n in sorted(q.items(), key=lambda t: -t[1]) if n]
+        idle = sum(1 for n in q.values() if not n)
+        note = "\n".join(x for x in (f"Без покупок: {idle} из {len(q)}." if idle else "", note_c) if x) or None
         paths = render.table_png(f"{name} · в штуках", label, [(0.04, "Имя", "left"), (0.55, "ID", "left"),
                                                                 (0.96, "шт.", "right")],
-                                 rows, prefix, total=["Итого", "", qty], note=note_c)
+                                 rows, prefix, total=["Итого", "", qty] if rows else None, note=note,
+                                 empty="Никто из списка пока не покупал")
     elif view == "q":
         days = report.by_day(lines, start, end)
         rows = [[f"{d:%d.%m}, {'пн вт ср чт пт сб вс'.split()[d.weekday()]}", n] for d, n in days if n]
@@ -270,7 +274,7 @@ async def button(cb: CallbackQuery):
         elif d.startswith("v:"):
             _, who, kind, view = d.split(":")
             if state["loading"]:
-                return await msg.answer("Бот загружает историю заказов Ozon за 40 дней (первый запуск, ~20 минут). "
+                return await msg.answer("Бот загружает историю заказов Ozon за 40 дней (первый запуск, ~5 минут). "
                                         "Нажмите кнопку ещё раз чуть позже.", reply_markup=views_kb(who, kind))
             if not fresh():
                 await msg.answer("Докачиваю свежие заказы Ozon…")
