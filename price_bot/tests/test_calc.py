@@ -52,6 +52,21 @@ class TestHistory(unittest.TestCase):
         self.assertIn("от 2 шт −7% → от 2 шт −7%, от 3 шт −8%", calc.fmt_history(e))
 
 
+class TestExport(unittest.TestCase):
+    def test_xlsx(self):
+        import io
+        from openpyxl import load_workbook
+        from price_bot import export
+        body = export.history_xlsx([
+            {"ts": "27.10 16:40", "at": "2026-10-27T16:40+03:00", "who": "Алиса", "kind": "price", "offer": "OZ214",
+             "old": 365, "new": 300},
+            {"ts": "27.10 16:41", "who": "Алиса", "kind": "qty", "offer": "OZ357NEW5", "old": [[2, 7]],
+             "new": [[2, 7], [3, 8]]}])
+        rows = list(load_workbook(io.BytesIO(body)).active.values)
+        self.assertEqual(rows[1], ("2026-10-27 16:40", "Алиса", "OZ214", "Цена", 365, 300, -65, -17.8))
+        self.assertEqual(rows[2][3:6], ("Скидка от количества", "от 2 шт −7%", "от 2 шт −7%, от 3 шт −8%"))
+
+
 class TestPrice(unittest.TestCase):
     def test_parse(self):
         self.assertEqual(calc.parse_price("1 290 ₽"), 1290)

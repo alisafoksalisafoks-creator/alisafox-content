@@ -25,11 +25,11 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, \
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, \
     ReplyKeyboardMarkup
 
 from price_bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from price_bot import calc, store
+from price_bot import calc, export, store
 from price_bot.ozon import Ozon, OzonError
 from price_bot.truestats import TrueStats
 
@@ -42,7 +42,7 @@ PRICES = "💰 Цены"
 QTY = "📦 Скидка от количества"
 REFRESH = "🔄 Обновить остатки"
 HISTORY = "📜 История"
-HIST_PAGE = 15
+HIST_PAGE = 15  # столько записей видно на экране «История», остальное — в файле
 ACCESS = "👥 Доступ"
 
 dp = Dispatcher()
@@ -496,8 +496,8 @@ async def apply_steps(cb: CallbackQuery, job):
         r = await ozon.set_stairways(job["items"])
     except OzonError as e:
         return await cb.message.answer(f"❌ Ozon не принял: {e}", reply_markup=nav_kb(job["back"]))
-    ts = f"{dt.datetime.now(MSK):%d.%m %H:%M}"
-    store.add_history([{"ts": ts, "who": cb.from_user.full_name, "kind": "qty", "offer": job["names"].get(s, str(s)),
+    now = dt.datetime.now(MSK)
+    store.add_history([{"ts": f"{now:%d.%m %H:%M}", "at": now.isoformat(timespec="minutes"), "who": cb.from_user.full_name, "kind": "qty", "offer": job["names"].get(s, str(s)),
                         "old": [list(x) for x in job["was"].get(s) or []], "new": [list(x) for x in st] if on else []}
                        for s, on, st in job["items"] if s not in r["errors"]])
     errs = {s: m for s, m in r["errors"].items() if m}
@@ -550,7 +550,9 @@ async def apply_price(cb: CallbackQuery, job):
     if errors:
         return await cb.message.answer(f"❌ Ozon не принял цену {job['offer_id']}: " + "; ".join(errors),
                                        reply_markup=nav_kb(job["back"]))
-    store.add_history([{"ts": f"{dt.datetime.now(MSK):%d.%m %H:%M}", "who": cb.from_user.full_name, "kind": "price",
+    now = dt.datetime.now(MSK)
+    store.add_history([{"ts": f"{now:%d.%m %H:%M}", "at": now.isoformat(timespec="minutes"),
+                        "who": cb.from_user.full_name, "kind": "price",
                         "offer": job["offer_id"], "old": job["old"], "new": job["new"]}])
     cache.pop("elastic", None)  # участие в бустинге зависит от цены
     await cb.message.answer(f"✅ Цена {job['offer_id']}: {calc.rub(job['old'])} → {calc.rub(job['new'])}. "
@@ -607,18 +609,25 @@ async def on_section(msg: Message):
         await msg.answer(f"Ozon не отдал товары: {e}")
 
 
-async def show_history(msg: Message, page=0, edit=False):
+async def show_history(msg: Message):
+    """Последние 15 изменений на экране; всё за месяц — файлом Excel по кнопке."""
     h = store.history()
     if not h:
         return await msg.answer("История пока пустая: через бота ещё ничего не меняли.", reply_markup=nav_kb())
-    chunk = h[page * HIST_PAGE:(page + 1) * HIST_PAGE]
-    pages = (len(h) - 1) // HIST_PAGE + 1
-    text = f"📜 История изменений через бота (стр. {page + 1} из {pages}, новые сверху)\n\n" + \
-           "\n".join(calc.fmt_history(e) for e in chunk)
-    nav = ([("◀️ Новее", f"hi:{page - 1}")] if page else []) + \
-          ([("Старее ▶️", f"hi:{page + 1}")] if page + 1 < pages else [])
-    markup = kb(([nav] if nav else []) + [[HOME]])
-    await (msg.edit_text(text, reply_markup=markup) if edit else msg.answer(text, reply_markup=markup))
+    text = "📜 История изменений через бота, последние 15, новые сверху\n\n" + \
+           "\n".join(calc.fmt_history(e) for e in h[:HIST_PAGE])
+    await msg.answer(text, reply_markup=kb([[("📥 Скачать за месяц (Excel)", "hx")], [HOME]]))
+
+
+async def send_history_file(msg: Message):
+    since = dt.datetime.now(MSK) - dt.timedelta(days=30)
+    rows = [e for e in store.history() if not e.get("at") or dt.datetime.fromisoformat(e["at"]) >= since]
+    if not rows:
+        return await msg.answer("За последние 30 дней изменений через бота не было.", reply_markup=nav_kb())
+    body = export.history_xlsx(rows)
+    name = f"история_цен_{dt.datetime.now(MSK):%Y-%m-%d}.xlsx"
+    await msg.answer_document(BufferedInputFile(body, name),
+                              caption=f"История изменений за 30 дней. Записей: {len(rows)}.", reply_markup=nav_kb())
 
 
 @dp.message(F.text == HISTORY)
@@ -727,7 +736,9 @@ async def route(cb: CallbackQuery, data):
             back = f"ca:q:{a[1]}:0n"
             return await (open_editor(cb, pids, title, back) if a[0] == "qcs" else ask_delete(cb, pids, title, back))
         if a[0] == "hi":
-            return await show_history(cb.message, int(a[1]), edit=True)
+            return await show_history(cb.message)
+        if a[0] == "hx":
+            return await send_history_file(cb.message)
         if a[0] == "dq":
             return await on_editor(cb, a)
         if a[0] == "ok":
