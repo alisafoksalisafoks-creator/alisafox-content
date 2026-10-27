@@ -266,7 +266,7 @@ async def show_category(msg: Message, sec, ci, page=0, edit=True):
     if cat is None:
         return await msg.edit_text("Список товаров обновился. Откройте раздел заново.", reply_markup=nav_kb())
     chunk = goods[page * PAGE:(page + 1) * PAGE]
-    rows = [[(f"{g['offer_id']} · {g['fbo']} шт · {g['name'][:24]}", f"pr:{sec}:{g['product_id']}")] for g in chunk]
+    rows = [[(f"{g['offer_id']} · FBO {g['fbo']} шт", f"pr:{sec}:{g['product_id']}")] for g in chunk]
     nav = ([("◀️", f"ca:{sec}:{ci}:{page - 1}")] if page else []) + \
           ([("▶️", f"ca:{sec}:{ci}:{page + 1}")] if (page + 1) * PAGE < len(goods) else [])
     if nav:
