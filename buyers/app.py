@@ -243,7 +243,8 @@ async def button(cb: CallbackQuery):
         elif d == "add":
             waiting[uid] = ("add",)
             await msg.answer("Пришлите ID покупателя и имя одной строкой, например:\n47327265 Анна 1\n\n"
-                             "Можно вставить номер заказа целиком: 47327265-0623-1 Анна 1 — ID возьму из начала.")
+                             "Можно сразу несколько — каждого с новой строки. Можно вставить номер заказа целиком: "
+                             "47327265-0623-1 Анна 1 — ID возьму из начала.")
         elif d.startswith("ren:"):
             waiting[uid] = ("ren", int(d[4:]))
             await msg.answer(f"Новое имя для ID {d[4:]}:")
@@ -301,15 +302,17 @@ async def text(msg: Message):
         return
     mode = waiting.pop(uid, None)
     if mode and mode[0] == "add":
-        bid, name = parse_buyer(msg.text)
-        if not bid:
+        added = [(bid, name or str(bid)) for bid, name in map(parse_buyer, msg.text.splitlines()) if bid]
+        if not added:
             waiting[uid] = mode
             return await msg.answer("Не вижу ID. Пришлите так: 47327265 Анна 1")
-        store.add_buyer(db, bid, name or str(bid))
-        start, end, _ = report.period("month")
-        n = len(store.buyer_lines(db, [bid], start - timedelta(days=40), end))
-        return await msg.answer(f"Добавила: {name or bid} (ID {bid}). В базе за 40 дней строк заказов: {n}.",
-                                reply_markup=periods_kb(str(bid)))
+        for bid, name in added:
+            store.add_buyer(db, bid, name)
+        if len(added) > 1:
+            return await msg.answer("Добавила:\n" + "\n".join(f"{n} · ID {b}" for b, n in added),
+                                    reply_markup=buyers_kb())
+        bid, name = added[0]
+        return await msg.answer(f"Добавила: {name} (ID {bid}). Выберите период:", reply_markup=periods_kb(str(bid)))
     if mode and mode[0] == "ren":
         store.add_buyer(db, mode[1], msg.text.strip())
         return await msg.answer("Имя изменила.", reply_markup=periods_kb(str(mode[1])))
