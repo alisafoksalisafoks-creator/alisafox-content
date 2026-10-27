@@ -5,10 +5,10 @@
 Переменные окружения: TELEGRAM_BOT_TOKEN (токен этого бота), TELEGRAM_CHAT_ID (владелец),
 OZON_BOT_CLIENT_ID / OZON_BOT_API_KEY (или OZON_CLIENT_ID / OZON_API_KEY); необязательно BUYERS_DB.
 
-Меню: 👥 Покупатели, ➕ Добавить ID, ✏️ Редактировать (имя → изменить имя / удалить). Покупатели → имя (или «Выкупы всего») → Сегодня / 7 дней / Месяц → 🔢 В штуках / 📋 Подробнее.
+Меню: 👥 Покупатели, ➕ Добавить ID, ✏️ Редактировать (имя → изменить имя / удалить). Покупатели → имя (или «Выкупы всего») → Сегодня / 7 дней / Месяц → 🔢 Штуки / 📋 Детали / 🔑 Ключи.
 «📍 Места в выдаче» (старт) — 7 дней / месяц: артикулы, купленные покупателями из списка, × дни, место за день.
 «🔑 Ключи» — топ-5 запросов по заказам для каждого купленного артикула (по всему кабинету).
-«В штуках» — только число по дням (у «Все» — по именам). «Подробнее» — артикул, штуки, сумма в заказе
+«Штуки» — только число по дням (у «Выкупы всего» — по именам). «Детали» — артикул, штуки, сумма в заказе
 и сколько заплатил покупатель. Отменённые заказы в штуки не идут, пишутся примечанием.
 """
 import asyncio
@@ -99,7 +99,9 @@ def who_is(u):
 # --- меню ---
 
 def main_menu(uid):
-    rows = [[("🛒 Выкупы сегодня", "v:all:today:q"), ("👥 Покупатели", "b")], [("📍 Места в выдаче", "pos")], [("➕ Добавить ID покупателя", "add"), ("✏️ Редактировать", "e")]]
+    # в кнопке Telegram текст не переносится — подписи короткие, длинные кнопки по одной в ряд
+    rows = [[("🛒 Выкупы сегодня", "v:all:today:q")], [("👥 Покупатели", "b")], [("📍 Места в выдаче", "pos")],
+            [("➕ Добавить ID", "add"), ("✏️ Редактировать", "e")]]
     if is_admin(uid):
         rows.append([("👤 Добавить пользователя в бот", "u")])
     return kb(rows)
@@ -114,9 +116,9 @@ def buyers_kb():
 
 
 def periods_kb(who):
-    rows = [[("Сегодня", f"p:{who}:today"), ("7 дней", f"p:{who}:7"), (f"Месяц · {report.month_label()}",
+    rows = [[("Сегодня", f"p:{who}:today"), ("7 дней", f"p:{who}:7"), (report.month_label(),
                                                                        f"p:{who}:month")]]
-    return kb(rows + [[("⬅️ Покупатели", "b"), ("🏠 Меню", "menu")]])
+    return kb(rows + [[("⬅️ Список", "b"), ("🏠 Меню", "menu")]])
 
 
 def edit_kb():
@@ -127,9 +129,9 @@ def edit_kb():
 
 
 def views_kb(who, kind):
-    return kb([[("🔢 В штуках", f"v:{who}:{kind}:q"), ("📋 Подробнее", f"v:{who}:{kind}:d"),
+    return kb([[("🔢 Штуки", f"v:{who}:{kind}:q"), ("📋 Детали", f"v:{who}:{kind}:d"),
                 ("🔑 Ключи", f"v:{who}:{kind}:k")],
-               [("⬅️ Период", f"b:{who}"), ("👥 Покупатели", "b"), ("🏠 Меню", "menu")]])
+               [("⬅️ Период", f"b:{who}"), ("👥 Список", "b"), ("🏠 Меню", "menu")]])
 
 
 # --- отчёты ---
@@ -159,7 +161,7 @@ def build(who, kind, view, prefix):
                 for b, n in sorted(q.items(), key=lambda t: -t[1]) if n]
         idle = sum(1 for n in q.values() if not n)
         note = "\n".join(x for x in (f"Без покупок: {idle} из {len(q)}." if idle else "", note_c) if x) or None
-        paths = render.table_png(f"{name} · в штуках", label, [(0.04, "Имя", "left"), (0.55, "ID", "left"),
+        paths = render.table_png(f"{name} · штуки", label, [(0.04, "Имя", "left"), (0.55, "ID", "left"),
                                                                 (0.96, "шт.", "right")],
                                  rows, prefix, total=["Итого", "", qty] if rows else None, note=note,
                                  empty="Никто из списка пока не покупал")
@@ -169,7 +171,7 @@ def build(who, kind, view, prefix):
         idle = sum(1 for _, n in days if not n)
         note = "\n".join(x for x in (f"Показаны дни с покупками. Дней без покупок: {idle}." if idle and rows else "",
                                       note_c) if x) or None
-        paths = render.table_png(f"{name} · в штуках", label, [(0.04, "Дата", "left"), (0.96, "шт.", "right")],
+        paths = render.table_png(f"{name} · штуки", label, [(0.04, "Дата", "left"), (0.96, "шт.", "right")],
                                  rows, prefix, total=["Итого", qty] if rows else None, note=note)
     else:
         det = report.details(lines)
@@ -187,7 +189,7 @@ def build(who, kind, view, prefix):
                     for r in det]
             tot = ["Итого", "", qty, money(total), money(paid)]
         note = NOTE_PRICE + (f"\n{note_c}" if note_c else "")
-        paths = render.table_png(f"{name} · подробнее", label, cols, rows, prefix, total=tot, note=note)
+        paths = render.table_png(f"{name} · детали", label, cols, rows, prefix, total=tot, note=note)
         if paid is not None:
             caption += f", заплатили {money(paid)}"
     return paths, caption
@@ -249,7 +251,7 @@ async def send_report(msg: Message, who, kind, view):
     try:
         if view == "pos":
             paths, caption = await asyncio.to_thread(locked, positions, kind, os.path.join(tmp, "r"))
-            markup = kb([[("7 дней", "ps:7"), (f"Месяц · {report.month_label()}", "ps:month")], [("🏠 Меню", "menu")]])
+            markup = kb([[("7 дней", "ps:7"), (report.month_label(), "ps:month")], [("🏠 Меню", "menu")]])
         else:
             paths, caption = await asyncio.to_thread(locked, build, who, kind, view, os.path.join(tmp, "r"))
             markup = views_kb(who, kind)
@@ -313,7 +315,7 @@ async def button(cb: CallbackQuery):
             await send_report(msg, who, kind, view)
         elif d == "pos":
             await msg.answer("Места в выдаче артикулов, которые купили покупатели из списка. За какой период?",
-                             reply_markup=kb([[("7 дней", "ps:7"), (f"Месяц · {report.month_label()}", "ps:month")],
+                             reply_markup=kb([[("7 дней", "ps:7"), (report.month_label(), "ps:month")],
                                               [("🏠 Меню", "menu")]]))
         elif d.startswith("ps:"):
             if state["loading"]:
@@ -356,7 +358,7 @@ async def users_button(msg, d):
         rows = [[(f"❌ {name}", f"u:del:{i}")] for i, name in users().items()]
         await msg.answer("Пользователи бота. Нажмите на имя, чтобы закрыть доступ.\n"
                          "Проще всего добавить так: человек нажимает /start в боте, вам приходит кнопка «Открыть».",
-                         reply_markup=kb(rows + [[("➕ Добавить по Telegram ID", "u:add")], [("⬅️ Меню", "menu")]]))
+                         reply_markup=kb(rows + [[("➕ Добавить по ID", "u:add")], [("⬅️ Меню", "menu")]]))
     elif d == "u:add":
         waiting[msg.chat.id] = ("user",)
         await msg.answer("Пришлите Telegram ID нового пользователя (цифрами).")
