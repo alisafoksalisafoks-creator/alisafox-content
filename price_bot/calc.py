@@ -78,6 +78,24 @@ def boost_hint(price, el):
     return lines
 
 
+def check_text(p, acts):
+    """Ответ /check: в каких акциях Ozon видит товар и какую вилку бустинга и цену на сайте отдаёт API."""
+    rows = acts.get("seen", {}).get(p["product_id"], [])
+    lines = [f"🔍 <b>{html.escape(p['offer_id'])}</b> в акциях Ozon (по API, сейчас)", ""]
+    for r in rows:
+        lines.append(f"• «{html.escape(r['action'])}» — {'участвует' if r['in_action'] else 'можно добавить'}: "
+                     f"мин. бустинг {rub(r['min_el'])}, макс. {rub(r['max_el'])}, на сайте {rub(r['site'])}")
+    if not rows:
+        lines.append("Ozon не вернул этот товар ни в одной акции: ни среди участников, ни среди кандидатов. "
+                     "Значит, по API вилки бустинга и цены на сайте для него сейчас нет.")
+    el = acts.get("elastic", {}).get(p["product_id"])
+    lines += ["", f"В «Ценах» беру вилку из «{html.escape(el['action'])}»: ≤ {rub(el['min_el'])} / ≤ {rub(el['max_el'])}"
+              if el else "Вилки бустинга по API нет."]
+    if acts.get("errors"):
+        lines += ["", "⚠️ Не ответили акции:"] + [f"• {html.escape(e[:150])}" for e in acts["errors"][:10]]
+    return "\n".join(lines)
+
+
 def fmt_stock(s):
     if not s:
         return "🏬 Остаток: нет данных Ozon"
@@ -167,9 +185,9 @@ def dashboard(p, d):
              fmt_stock(d.get("stock")),
              f"💰 Цена: <b>{rub(price)}</b>",
              f"   с вашими акциями: {rub(d.get('seller_price'))}, на сайте: {rub(d.get('site_price'))}"]
-    if d.get("min_price"):
-        lines.append(f"   мин. цена для автоакций: {rub(d['min_price'])}")
     lines += boost_hint(price, d.get("elastic"))
+    if d.get("actions_errors"):
+        lines.append(f"   ⚠️ Ozon не отдал данные {d['actions_errors']} акций — подробно: /check {html.escape(p['offer_id'])}")
     lines.append("")
     ts = d.get("ts")
     if ts:

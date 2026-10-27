@@ -159,6 +159,7 @@ async def collect(p):
     d["site_price"] = acts["site"].get(pid)
     d["soinvest"] = calc.soinvest(d.get("seller_price"), d.get("site_price"))
     d["elastic"] = acts["elastic"].get(pid)
+    d["actions_errors"] = len(acts.get("errors") or [])
     d["stairway"] = res["stairway"].get(sku) if isinstance(res["stairway"], dict) else None
     d["stock"] = res["stock"].get(pid) if isinstance(res["stock"], dict) else None
     if isinstance(res["ts"], dict):
@@ -652,6 +653,27 @@ async def on_refresh(msg: Message):
     cache.pop("actions", None)
     await wait.edit_text(f"Готово: {len(goods)} товаров в продаже с остатком на складах Ozon, "
                          f"{len(categories(goods))} категорий.", reply_markup=nav_kb())
+
+
+@dp.message(Command("check"))
+async def on_check(msg: Message):
+    """/check АРТИКУЛ — что Ozon по API отдаёт по товару во всех акциях: вилка бустинга и цена на сайте."""
+    if not allowed(msg.from_user.id):
+        return
+    offer = (msg.text or "").partition(" ")[2].strip()
+    if not offer:
+        return await msg.answer("Напишите так: /check OZ445-X76-3BLACK", reply_markup=nav_kb())
+    p = next((g for g in await items() if g["offer_id"].lower() == offer.lower()), None)
+    if not p:
+        return await msg.answer(f"Артикула {html.escape(offer)} нет в списке товаров с остатком FBO. "
+                                "Проверьте написание или нажмите «🔄 Обновить остатки».", reply_markup=nav_kb())
+    wait = await msg.answer("Смотрю все акции Ozon по API, это до минуты…")
+    cache.pop("actions", None)
+    try:
+        acts = await cached("actions", 1800, ozon.actions)
+    except OzonError as e:
+        return await wait.edit_text(f"Ozon не отдал акции: {html.escape(str(e))}")
+    await wait.edit_text(calc.check_text(p, acts), reply_markup=nav_kb())
 
 
 @dp.message(F.text == ACCESS)

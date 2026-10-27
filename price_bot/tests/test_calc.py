@@ -107,6 +107,19 @@ class TestBoost(unittest.TestCase):
         self.assertIn("нет в акциях", calc.boost_hint(300, None)[0])
 
 
+class TestCheck(unittest.TestCase):
+    def test_lists_actions_and_errors(self):
+        p = {"product_id": 1, "offer_id": "OZ445"}
+        acts = {"seen": {1: [{"action": "Эластичный бустинг", "in_action": False, "min_el": 637, "max_el": 539,
+                              "site": 700}]},
+                "elastic": {1: {"action": "Эластичный бустинг", "min_el": 637, "max_el": 539}},
+                "errors": ["Купон: 400"]}
+        text = calc.check_text(p, acts)
+        for part in ("можно добавить", "мин. бустинг 637 ₽", "≤ 637 ₽ / ≤ 539 ₽", "Купон: 400"):
+            self.assertIn(part, text)
+        self.assertIn("ни в одной акции", calc.check_text(p, {"seen": {}, "elastic": {}}))
+
+
 class TestTrend(unittest.TestCase):
     def test_position_lower_is_better(self):
         self.assertTrue(calc.trend(5, 7, lower_is_better=True).startswith("🟢 ▼"))

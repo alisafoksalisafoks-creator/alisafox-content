@@ -80,6 +80,40 @@ class TestOzon(unittest.TestCase):
         self.assertEqual((e["action"], e["min_el"], e["max_el"], e["in_action"]),
                          ("Эластичный бустинг", 637.0, 539.0, False))
 
+    def test_one_failed_action_keeps_others(self):
+        # акция без «бустинга» в названии, но с вилкой; другая акция падает в v2 и в v1 — остальное не теряем
+        from price_bot.ozon import OzonError
+
+        def v2(b):
+            if b["action_id"] == 1:
+                raise OzonError("/v2/actions/candidates: 400 bad action")
+            return {"products": [{"id": 10, "price_min_elastic": 637, "price_max_elastic": 539,
+                                  "website_prices": {"price": {"amount": "700"}}}]}
+
+        def v1(b):
+            raise OzonError("/v1/actions/candidates: 400")
+        o = Fake({"/v1/actions": {"result": [{"id": 1, "title": "Купон"}, {"id": 2, "title": "Бонус за цену"}]},
+                  "/v2/actions/products": {"products": []}, "/v2/actions/candidates": v2,
+                  "/v1/actions/candidates": v1})
+        r = run(o.actions())
+        self.assertEqual((r["elastic"][10]["min_el"], r["elastic"][10]["action"]), (637.0, "Бонус за цену"))
+        self.assertEqual(r["site"], {10: 700.0})
+        self.assertEqual(len(r["errors"]), 1)
+        self.assertEqual(len(r["seen"][10]), 1)
+
+    def test_v1_fallback_unwraps_result(self):
+        from price_bot.ozon import OzonError
+
+        def v2(b):
+            raise OzonError("/v2: 404")
+        o = Fake({"/v1/actions": {"result": [{"id": 3, "title": "Эластичный бустинг"}]},
+                  "/v2/actions/products": v2, "/v2/actions/candidates": v2,
+                  "/v1/actions/products": {"result": {"products": [], "total": 0}},
+                  "/v1/actions/candidates": {"result": {"products": [{"id": 10, "price_min_elastic": 637}],
+                                                        "last_id": 0}}})
+        e = run(o.actions())["elastic"][10]
+        self.assertEqual((e["min_el"], e["max_el"], e["in_action"]), (637.0, None, False))
+
     def test_set_price_errors(self):
         o = Fake({"/v1/product/import/prices": {"result": [{"updated": False, "errors": [{"message": "old_price"}]}]}})
         self.assertEqual(run(o.set_price("OZ214", 1290)), ["old_price"])

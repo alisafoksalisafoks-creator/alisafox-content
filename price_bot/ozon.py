@@ -152,43 +152,68 @@ class Ozon:
     # --- акции: «Эластичный бустинг» и цена на сайте ---
 
     async def actions(self):
-        """{"elastic": {product_id: {...}}, "site": {product_id: цена на сайте}} по всем акциям Ozon.
+        """{"elastic": {product_id: {...}}, "site": {product_id: цена}, "seen": {product_id: [...]}, "errors": [...]}.
 
-        Цены AY/AZ из шаблона цен: price_min_elastic — цена для минимального бустинга (вход в акцию),
-        price_max_elastic — для максимального; берём из акций «…бустинг». Цену на сайте (website_prices) Ozon
-        отдаёт по товарам любой акции — участникам и кандидатам; подписка для этого не нужна.
+        Вилку берём из любой акции, где Ozon отдаёт price_min_elastic / price_max_elastic (цена для минимального
+        и максимального бустинга), — по названию акцию не отсеиваем. Если товар в нескольких таких акциях,
+        приоритет у «Эластичного бустинга», затем у той, где товар уже участвует. Цену на сайте (website_prices)
+        Ozon отдаёт по товарам любой акции — участникам и кандидатам; подписка не нужна.
+        Сбой одной акции не роняет остальные: она попадает в errors. seen — что Ozon вернул по товару, для /check.
         """
         actions = (await self.call("/v1/actions", method="GET")).get("result", [])
-        # сначала бустинг: из него и вилка, и цена на сайте
-        actions.sort(key=lambda a: "бустинг" not in (a.get("title") or "").lower())
-        elastic, site = {}, {}
+        elastic, site, seen, errors = {}, {}, {}, []
         for a in actions:
-            boost = "бустинг" in (a.get("title") or "").lower()
-            for path, inside in (("/v2/actions/products", True), ("/v2/actions/candidates", False)):
-                last = ""
-                while True:
-                    r = await self.call(path, {"action_id": int(a["id"]), "last_id": last, "limit": 1000})
-                    for p in r.get("products", []):
-                        sp = _money((p.get("website_prices") or {}).get("price"))
-                        if sp and p["id"] not in site:
-                            site[p["id"]] = sp
-                        lo, hi = _money(p.get("price_min_elastic")), _money(p.get("price_max_elastic"))
-                        if not boost or (not lo and not hi):
-                            continue
-                        prev = elastic.get(p["id"])
-                        rank = ("эластичн" in a.get("title", "").lower(), inside)  # шаблон цен = «Эластичный бустинг»
-                        if prev and prev["rank"] >= rank:
-                            continue
-                        elastic[p["id"]] = {"action": a.get("title"), "min_el": lo, "max_el": hi, "in_action": inside,
-                                            "boost": p.get("current_boost"), "min_boost": p.get("min_boost"),
-                                            "max_boost": p.get("max_boost"),
-                                            "action_price": _money(p.get("action_price")), "rank": rank}
-                        log.debug("бустинг %s, товар %s: min %s, max %s, участник %s", a.get("title"), p["id"],
-                                 lo, hi, inside)
-                    last = r.get("last_id")
-                    if not last or not r.get("products"):
-                        break
-        return {"elastic": elastic, "site": site}
+            title = a.get("title") or f"акция {a.get('id')}"
+            elastic_title = "эластичн" in title.lower() or "ELASTIC" in (a.get("action_type") or "").upper()
+            for kind, inside in (("products", True), ("candidates", False)):
+                try:
+                    products = await self._action_products(kind, int(a["id"]))
+                except OzonError as e:
+                    errors.append(f"{title}: {e}")
+                    log.warning("акция %s, %s: %s", title, kind, e)
+                    continue
+                for p in products:
+                    sp = _money((p.get("website_prices") or {}).get("price"))
+                    if sp and p["id"] not in site:
+                        site[p["id"]] = sp
+                    lo, hi = _money(p.get("price_min_elastic")), _money(p.get("price_max_elastic"))
+                    seen.setdefault(p["id"], []).append({"action": title, "in_action": inside, "min_el": lo,
+                                                         "max_el": hi, "site": sp})
+                    if not lo and not hi:
+                        continue
+                    rank = (elastic_title, inside)
+                    prev = elastic.get(p["id"])
+                    if prev and prev["rank"] >= rank:
+                        continue
+                    elastic[p["id"]] = {"action": title, "min_el": lo, "max_el": hi, "in_action": inside,
+                                        "boost": p.get("current_boost"), "min_boost": p.get("min_boost"),
+                                        "max_boost": p.get("max_boost"),
+                                        "action_price": _money(p.get("action_price")), "rank": rank}
+        log.info("акции: %s, вилка бустинга у %s товаров, цена на сайте у %s, ошибок %s",
+                 len(actions), len(elastic), len(site), len(errors))
+        return {"elastic": elastic, "site": site, "seen": seen, "errors": errors}
+
+    async def _action_products(self, kind, action_id):
+        """Все товары акции: kind="products" — участники, "candidates" — могут участвовать. v2, при сбое — v1."""
+        try:
+            return await self._pages(f"/v2/actions/{kind}", action_id)
+        except OzonError as e:
+            log.info("/v2/actions/%s для %s: %s, пробую v1", kind, action_id, e)
+            return await self._pages(f"/v1/actions/{kind}", action_id)
+
+    async def _pages(self, path, action_id):
+        out, last = [], None
+        while True:
+            body = {"action_id": action_id, "limit": 1000}
+            if last:
+                body["last_id"] = last
+            r = await self.call(path, body)
+            r = r.get("result") or {} if "result" in r else r  # v1 заворачивает ответ в result
+            items = r.get("products") or []
+            out += items
+            last = r.get("last_id")
+            if not items or not last:
+                return out
 
     # --- скидка от количества ---
 

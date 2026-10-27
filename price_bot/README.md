@@ -25,10 +25,12 @@ Telegram-бот для цен и скидки от количества на Ozo
 |---|---|
 | Цена, мин. цена, комиссия | Ozon `/v5/product/info/prices` |
 | Цена на сайте, соинвест | Ozon `/v2/actions/products` и `/v2/actions/candidates`, поле `website_prices` (без подписки); соинвест ≈ (цена с вашими акциями − цена на сайте) / цена с вашими акциями |
-| Вилка бустинга AY/AZ | Ozon `/v2/actions/products` и `/v2/actions/candidates`, поля `price_min_elastic` / `price_max_elastic` |
+| Вилка бустинга AY/AZ | Ozon `/v2/actions/products` и `/v2/actions/candidates` (при сбое — `/v1/…`), поля `price_min_elastic` / `price_max_elastic` из любой акции, где они есть; приоритет у «Эластичного бустинга». Шаблон цен присылать не нужно |
 | Скидка от количества | Ozon `/v1/product/stairway-discount/by-quantity/get` и `/set` (бета-методы Ozon) |
 | Место в выдаче | Ozon `/v1/analytics/data`, метрика `position_category` |
 | ЧП на 1 шт, ДРР, РК ДРР | TrueStats, отчёт по товарам: `averageProfitPerPiece`, `drr`, `drrz` |
+
+**/check АРТИКУЛ** — что Ozon по API отдаёт по товару в каждой акции: вилка бустинга, цена на сайте, какие акции не ответили. Если в «Ценах» пусто — смотрите сюда.
 
 Прогноз ЧП при новой цене: `ЧП + (новая − текущая) × (1 − комиссия Ozon − общий ДРР) × (1 − 7% УСН)`. Это оценка, не факт.
 
