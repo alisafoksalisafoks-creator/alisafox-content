@@ -203,9 +203,13 @@ class Ozon:
                 if sp and p["id"] not in site:
                     site[p["id"]] = sp
                 lo, hi = _money(p.get("price_min_elastic")), _money(p.get("price_max_elastic"))
+                cap = _money(p.get("max_action_price"))
+                if elastic_title and not lo and cap:
+                    lo = cap  # Ozon не отдал цену мин. бустинга — порог входа = максимальная цена товара по акции
                 seen.setdefault(p["id"], []).append({"action": title, "in_action": inside, "min_el": lo,
-                                                     "max_el": hi, "site": sp})
-                if not lo and not hi:
+                                                     "max_el": hi, "site": sp, "cap": cap,
+                                                     "raw_min": _money(p.get("price_min_elastic"))})
+                if not lo and not hi and not elastic_title:
                     continue
                 rank = (elastic_title, inside)
                 prev = elastic.get(p["id"])

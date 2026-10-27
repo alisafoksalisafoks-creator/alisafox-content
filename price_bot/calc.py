@@ -67,6 +67,8 @@ def boost_hint(price, el):
         lines = [f"✅ В акции «{html.escape(el['action'])}»{b}"]
     else:
         lines = [f"🎯 Акция «{html.escape(el['action'])}» (пока не участвуете):"]
+    if not el.get("min_el") and not el.get("max_el"):
+        lines.append("   Ozon не отдал по API цену для бустинга — посмотрите её в кабинете")
     for title, limit in (("   вход (мин. бустинг)", el.get("min_el")),
                          ("   макс. бустинг", el.get("max_el"))):
         if not limit:
@@ -84,7 +86,8 @@ def check_text(p, acts):
     lines = [f"🔍 <b>{html.escape(p['offer_id'])}</b> в акциях Ozon (по API, сейчас)", ""]
     for r in rows:
         lines.append(f"• «{html.escape(r['action'])}» — {'участвует' if r['in_action'] else 'можно добавить'}: "
-                     f"мин. бустинг {rub(r['min_el'])}, макс. {rub(r['max_el'])}, с картой {rub(r['site'])}")
+                     f"мин. бустинг {rub(r.get('raw_min', r['min_el']))}, макс. {rub(r['max_el'])}, "
+                     f"макс. цена по акции {rub(r.get('cap'))}, с картой {rub(r['site'])}")
     if not rows:
         lines.append("Ozon не вернул этот товар ни в одной акции: ни среди участников, ни среди кандидатов. "
                      "Значит, по API вилки бустинга и цены на сайте для него сейчас нет.")

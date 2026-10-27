@@ -148,6 +148,17 @@ class TestOzon(unittest.TestCase):
         self.assertEqual(len(r["elastic"]), 101)
         self.assertTrue(all(b["limit"] <= 100 for path, b in o.sent if path.startswith("/v2/actions")))
 
+    def test_elastic_candidate_without_elastic_prices(self):
+        # OZ470-MD60: кандидат в «Эластичный бустинг», Ozon не отдал price_min_elastic — порог из max_action_price
+        prod = {"id": 10, "max_action_price": {"amount": "1597"},
+                "website_prices": {"prices_by_schema": {"FBO": {"green_price": {"amount": "909"}}}}}
+        o = Fake({"/v1/actions": {"result": [{"id": 1, "title": "Эластичный бустинг. Без ограничения срока действия"}]},
+                  "/v2/actions/products": {"products": []}, "/v2/actions/candidates": {"products": [prod]}})
+        r = run(o.actions())
+        e = r["elastic"][10]
+        self.assertEqual((e["min_el"], e["in_action"]), (1597.0, False))
+        self.assertEqual(r["site"][10], 909.0)
+
     def test_set_price_errors(self):
         o = Fake({"/v1/product/import/prices": {"result": [{"updated": False, "errors": [{"message": "old_price"}]}]}})
         self.assertEqual(run(o.set_price("OZ214", 1290)), ["old_price"])
