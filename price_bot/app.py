@@ -41,6 +41,8 @@ PAGE = 20  # кнопок на странице списка
 PRICES = "💰 Цены"
 QTY = "📦 Скидка от количества"
 REFRESH = "🔄 Обновить остатки"
+HISTORY = "📜 История"
+HIST_PAGE = 15
 ACCESS = "👥 Доступ"
 
 dp = Dispatcher()
@@ -59,7 +61,7 @@ def allowed(user_id):
 
 def menu(user_id):
     rows = [[KeyboardButton(text=PRICES), KeyboardButton(text=QTY)],
-            [KeyboardButton(text=REFRESH)] + ([KeyboardButton(text=ACCESS)] if user_id == OWNER else [])]
+            [KeyboardButton(text=HISTORY), KeyboardButton(text=REFRESH)] + ([KeyboardButton(text=ACCESS)] if user_id == OWNER else [])]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 
@@ -318,7 +320,11 @@ async def open_editor(cb: CallbackQuery, pids, title, back):
     orig = list(variants.pop()) if len(variants) == 1 else []
     note = "" if len(targets) == 1 or len(variants) == 0 else \
         "⚠️ У товаров категории сейчас разные уровни. После сохранения у всех станут одинаковые."
+    price = None
+    if len(targets) == 1:  # цена за штуку по уровням — как в кабинете Ozon; у категории цены разные
+        price = (await ozon.prices([targets[0]["product_id"]])).get(targets[0]["product_id"], {}).get("price")
     drafts[cb.from_user.id] = {"targets": [t["product_id"] for t in targets], "title": title, "back": back,
+                               "price": price,
                                "orig": orig, "steps": [list(x) for x in orig], "note": note,
                                "current": {t["sku"]: current.get(t["sku"]) for t in targets}}
     await show_editor(cb.message, cb.from_user.id, edit=False)
@@ -344,7 +350,7 @@ def editor_kb(dr):
 
 async def show_editor(msg: Message, uid, edit=True):
     dr = drafts[uid]
-    text = calc.editor_text(dr["title"], dr["orig"], dr["steps"], dr["note"])
+    text = calc.editor_text(dr["title"], dr["orig"], dr["steps"], dr["note"], dr.get("price"))
     if not edit:
         return await msg.answer(text, reply_markup=editor_kb(dr))
     try:
@@ -464,8 +470,9 @@ async def save_editor(cb: CallbackQuery, uid):
         lines.append(f"…и ещё {len(jobs) - 15}")
     drafts.pop(uid, None)
     pending[uid] = {"kind": "steps", "back": dr["back"], "items": jobs,
-                    "names": {t["sku"]: t["offer_id"] for t in targets},
-                    "summary": f"скидка от количества {dr['title']}: {calc.fmt_steps(steps)}"}
+                    "was": {t["sku"]: (dr["current"].get(t["sku"]) or {}).get("steps") if
+                            (dr["current"].get(t["sku"]) or {}).get("enabled") else [] for t in targets},
+                    "names": {t["sku"]: t["offer_id"] for t in targets}}
     await cb.message.edit_text("\n".join(lines + ["", "Точно применяем?"]), reply_markup=confirm_kb(dr["back"]))
 
 
@@ -482,8 +489,8 @@ async def ask_delete(cb: CallbackQuery, pids, title, back):
         lines.append(f"…и ещё {len(on) - 15}")
     pending[cb.from_user.id] = {"kind": "steps", "back": back,
                                 "items": [(t["sku"], False, current[t["sku"]]["steps"]) for t in on],
-                                "names": {t["sku"]: t["offer_id"] for t in on},
-                                "summary": f"удалена скидка от количества {title}"}
+                                "was": {t["sku"]: current[t["sku"]]["steps"] for t in on},
+                                "names": {t["sku"]: t["offer_id"] for t in on}}
     await cb.message.answer("\n".join(lines + ["", "Точно удаляем?"]), reply_markup=confirm_kb(back))
 
 
@@ -492,7 +499,10 @@ async def apply_steps(cb: CallbackQuery, job):
         r = await ozon.set_stairways(job["items"])
     except OzonError as e:
         return await cb.message.answer(f"❌ Ozon не принял: {e}", reply_markup=nav_kb(job["back"]))
-    store.log_change(f"{dt.datetime.now(MSK):%Y-%m-%d %H:%M} {who(cb.from_user)}: {job['summary']}")
+    ts = f"{dt.datetime.now(MSK):%d.%m %H:%M}"
+    store.add_history([{"ts": ts, "who": cb.from_user.full_name, "kind": "qty", "offer": job["names"].get(s, str(s)),
+                        "old": [list(x) for x in job["was"].get(s) or []], "new": [list(x) for x in st] if on else []}
+                       for s, on, st in job["items"] if s not in r["errors"]])
     errs = {s: m for s, m in r["errors"].items() if m}
     text = f"📤 Отправила в Ozon: {len(job['items'])} шт. Ozon применяет не сразу — проверю через минуту."
     if errs:
@@ -543,8 +553,8 @@ async def apply_price(cb: CallbackQuery, job):
     if errors:
         return await cb.message.answer(f"❌ Ozon не принял цену {job['offer_id']}: " + "; ".join(errors),
                                        reply_markup=nav_kb(job["back"]))
-    store.log_change(f"{dt.datetime.now(MSK):%Y-%m-%d %H:%M} {who(cb.from_user)}: цена {job['offer_id']} "
-                     f"{job['old']} → {job['new']}")
+    store.add_history([{"ts": f"{dt.datetime.now(MSK):%d.%m %H:%M}", "who": cb.from_user.full_name, "kind": "price",
+                        "offer": job["offer_id"], "old": job["old"], "new": job["new"]}])
     cache.pop("elastic", None)  # участие в бустинге зависит от цены
     await cb.message.answer(f"✅ Цена {job['offer_id']}: {calc.rub(job['old'])} → {calc.rub(job['new'])}. "
                             "На витрине Ozon обновится в течение нескольких минут.",
@@ -600,6 +610,26 @@ async def on_section(msg: Message):
         await msg.answer(f"Ozon не отдал товары: {e}")
 
 
+async def show_history(msg: Message, page=0, edit=False):
+    h = store.history()
+    if not h:
+        return await msg.answer("История пока пустая: через бота ещё ничего не меняли.", reply_markup=nav_kb())
+    chunk = h[page * HIST_PAGE:(page + 1) * HIST_PAGE]
+    pages = (len(h) - 1) // HIST_PAGE + 1
+    text = f"📜 История изменений через бота (стр. {page + 1} из {pages}, новые сверху)\n\n" + \
+           "\n".join(calc.fmt_history(e) for e in chunk)
+    nav = ([("◀️ Новее", f"hi:{page - 1}")] if page else []) + \
+          ([("Старее ▶️", f"hi:{page + 1}")] if page + 1 < pages else [])
+    markup = kb(([nav] if nav else []) + [[HOME]])
+    await (msg.edit_text(text, reply_markup=markup) if edit else msg.answer(text, reply_markup=markup))
+
+
+@dp.message(F.text == HISTORY)
+async def on_history(msg: Message):
+    if allowed(msg.from_user.id):
+        await show_history(msg)
+
+
 @dp.message(F.text == REFRESH)
 async def on_refresh(msg: Message):
     """Список товаров обновляется только по этой кнопке: в боте — то, что в продаже и есть на складах Ozon."""
@@ -653,7 +683,8 @@ async def on_button(cb: CallbackQuery):
 
 async def show_home(msg: Message, uid):
     await msg.answer("Главное меню. Выберите раздел.", reply_markup=kb([[("💰 Цены", "cl:p:0n"),
-                                                                       ("📦 Скидка от количества", "cl:q:0n")]]))
+                                                                       ("📦 Скидка от количества", "cl:q:0n")],
+                                                                      [("📜 История", "hi:0")]]))
     await msg.answer("Кнопки разделов есть и внизу экрана.", reply_markup=menu(uid))
 
 
@@ -698,6 +729,8 @@ async def route(cb: CallbackQuery, data):
             title = f"вся категория «{html.escape(cat)}» ({len(pids)} шт.)"
             back = f"ca:q:{a[1]}:0n"
             return await (open_editor(cb, pids, title, back) if a[0] == "qcs" else ask_delete(cb, pids, title, back))
+        if a[0] == "hi":
+            return await show_history(cb.message, int(a[1]), edit=True)
         if a[0] == "dq":
             return await on_editor(cb, a)
         if a[0] == "ok":

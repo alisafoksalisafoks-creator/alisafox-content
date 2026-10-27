@@ -7,7 +7,7 @@ DATA = Path(os.environ.get("PRICE_BOT_DATA", Path(__file__).resolve().parent.par
 USERS = DATA / "users.json"
 CATALOG = DATA / "catalog.json"
 SNAPSHOTS = DATA / "snapshots.json"
-LOG = DATA / "changes.log"
+HISTORY = DATA / "history.jsonl"
 KEEP_DAYS = 14
 
 
@@ -73,9 +73,26 @@ def save_snapshot(day, values):
     _write(SNAPSHOTS, s)
 
 
-# --- журнал изменений ---
+# --- история изменений ---
 
-def log_change(line):
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a", encoding="utf-8") as f:
-        f.write(line + "\n")
+def add_history(entries):
+    """Дописывает записи {"ts", "who", "kind": "price"|"qty", "offer", "old", "new"} — по одной строке JSON."""
+    HISTORY.parent.mkdir(parents=True, exist_ok=True)
+    with HISTORY.open("a", encoding="utf-8") as f:
+        for e in entries:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+
+
+def history():
+    """Все записи, новые сверху."""
+    try:
+        lines = HISTORY.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    out = []
+    for ln in reversed(lines):
+        try:
+            out.append(json.loads(ln))
+        except json.JSONDecodeError:
+            pass  # оборванная строка при сбое — пропускаем
+    return out

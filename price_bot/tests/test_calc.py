@@ -41,6 +41,20 @@ class TestEditor(unittest.TestCase):
         self.assertIn("у товаров разные уровни", calc.editor_text("x", [], [], note="⚠️ разные"))
 
 
+class TestHistory(unittest.TestCase):
+    def test_price_line(self):
+        e = {"ts": "27.10 16:40", "who": "Алиса", "kind": "price", "offer": "OZ214", "old": 365, "new": 300}
+        self.assertEqual(calc.fmt_history(e), "27.10 16:40 · Алиса · <b>OZ214</b>: цена 365 ₽ → 300 ₽ (−65 ₽, −17,8%)")
+
+    def test_qty_line(self):
+        e = {"ts": "27.10 16:41", "who": "Алиса", "kind": "qty", "offer": "OZ357NEW5", "old": [[2, 7]],
+             "new": [[2, 7], [3, 8]]}
+        self.assertIn("от 2 шт −7% → от 2 шт −7%, от 3 шт −8%", calc.fmt_history(e))
+
+    def test_editor_price_per_piece(self):
+        self.assertIn("1) от 2 шт −7% → 1 581 ₽ за шт", calc.editor_text("x", [(2, 7)], [[2, 7]], price=1700))
+
+
 class TestPrice(unittest.TestCase):
     def test_parse(self):
         self.assertEqual(calc.parse_price("1 290 ₽"), 1290)

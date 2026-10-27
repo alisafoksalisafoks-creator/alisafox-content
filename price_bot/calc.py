@@ -109,15 +109,18 @@ def validate_steps(steps):
     return steps
 
 
-def editor_text(title, orig, draft, note=""):
+def editor_text(title, orig, draft, note="", price=None):
     """Экран редактора уровней: что сейчас в Ozon и что будет после сохранения. title уже экранирован."""
     lines = [f"📦 Скидка от количества: <b>{title}</b>",
              f"Сейчас в Ozon: {'у товаров разные уровни' if note else fmt_steps(orig)}"]
     if note:
         lines.append(note)
+    if price:
+        lines.append(f"Цена за единицу сейчас: {rub(price)}")
     lines += ["", "<b>Будет после сохранения:</b>"]
     if draft:
-        lines += [f"{i}) от {q} шт −{d}%" for i, (q, d) in enumerate(draft, 1)]
+        lines += [f"{i}) от {q} шт −{d}%" + (f" → {rub(price * (1 - d / 100))} за шт" if price else "")
+                  for i, (q, d) in enumerate(draft, 1)]
     else:
         lines.append("без скидки от количества")
     try:
@@ -128,6 +131,17 @@ def editor_text(title, orig, draft, note=""):
         lines += ["", "Изменений пока нет."]
     lines += ["", "±1% меняет скидку уровня, ✏️ — количество и скидку, 🗑 — убрать уровень."]
     return "\n".join(lines)
+
+
+def fmt_history(e):
+    """Строка истории: «27.10 16:40 · Алиса · OZ214: цена 365 ₽ → 300 ₽ (−65 ₽, −17,8%)»."""
+    head = f"{e['ts']} · {html.escape(e['who'])} · <b>{html.escape(e['offer'])}</b>"
+    if e["kind"] == "price":
+        old, new = e.get("old"), e["new"]
+        delta = f" ({'+' if new > old else '−'}{rub(abs(new - old))}, {'+' if new > old else '−'}" \
+                f"{pct(abs(new - old) / old * 100)})" if old else ""
+        return f"{head}: цена {rub(old)} → {rub(new)}{delta}"
+    return f"{head}: скидка от кол-ва {fmt_steps(e.get('old'))} → {fmt_steps(e['new'])}"
 
 
 def parse_price(text):
