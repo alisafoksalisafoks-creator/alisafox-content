@@ -88,7 +88,7 @@ async def cached(key, ttl, load):
 
 async def items():
     c = store.catalog()
-    if not c["items"]:
+    if not c["items"] or "fbo" not in c["items"][0]:  # пусто или каталог старого формата, ещё без остатков
         await refresh_catalog()
         c = store.catalog()
     return c["items"]
@@ -254,7 +254,7 @@ async def show_category(msg: Message, sec, ci, page=0):
     if cat is None:
         return await msg.edit_text("Список товаров обновился. Откройте раздел заново.")
     chunk = goods[page * PAGE:(page + 1) * PAGE]
-    rows = [[(f"{g['offer_id']} · {g['name'][:30]}", f"pr:{sec}:{g['product_id']}")] for g in chunk]
+    rows = [[(f"{g['offer_id']} · {g['fbo']} шт · {g['name'][:24]}", f"pr:{sec}:{g['product_id']}")] for g in chunk]
     nav = ([("◀️", f"ca:{sec}:{ci}:{page - 1}")] if page else []) + \
           ([("▶️", f"ca:{sec}:{ci}:{page + 1}")] if (page + 1) * PAGE < len(goods) else [])
     if nav:
@@ -464,7 +464,8 @@ async def on_refresh(msg: Message):
     except OzonError as e:
         return await wait.edit_text(f"Не получилось: {e}")
     cache.pop("elastic", None)
-    await wait.edit_text(f"Готово: {len(goods)} товаров в {len(categories(goods))} категориях.")
+    await wait.edit_text(f"Готово: {len(goods)} товаров в продаже с остатком на складах Ozon, "
+                         f"{len(categories(goods))} категорий.")
 
 
 @dp.message(F.text == ACCESS)

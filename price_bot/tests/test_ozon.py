@@ -30,12 +30,16 @@ class TestOzon(unittest.TestCase):
                                                                          "children": []}]}]},
             "/v3/product/info/list": {"items": [
                 {"id": 10, "offer_id": "OZ214", "name": "FM", "type_id": 7, "description_category_id": 5,
-                 "sources": [{"sku": 424936924}]},
+                 "sources": [{"sku": 424936924}],
+                 "stocks": {"stocks": [{"source": "fbo", "present": 30}, {"source": "fbs", "present": 5}]}},
+                {"id": 12, "offer_id": "FBS-ONLY", "name": "только FBS", "type_id": 7, "sources": [{"sku": 99}],
+                 "stocks": {"stocks": [{"source": "fbs", "present": 5}]}},
                 {"id": 11, "offer_id": "NEW", "name": "без SKU", "type_id": 7, "sources": []}]},
         })
         goods = run(o.catalog())
         self.assertEqual(goods, [{"product_id": 10, "offer_id": "OZ214", "sku": 424936924, "name": "FM",
-                                  "cat": "FM-трансмиттер"}])
+                                  "fbo": 30, "cat": "FM-трансмиттер"}])
+        self.assertEqual(o.sent[0][1]["filter"]["visibility"], "VISIBLE_WITH_FBO_STOCK")
 
     def test_stairways_roundtrip(self):
         o = Fake({"/v1/product/stairway-discount/by-quantity/get": {"stairways": [

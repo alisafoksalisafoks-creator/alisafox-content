@@ -57,10 +57,14 @@ class Ozon:
     # --- каталог ---
 
     async def catalog(self):
-        """Все товары (без архива): [{product_id, offer_id, sku, name, cat}], cat — тип товара Ozon."""
+        """Товары в продаже с остатком на складах Ozon (FBO): [{product_id, offer_id, sku, name, cat, fbo}].
+
+        cat — тип товара Ozon. Без остатка FBO товар в боте не показываем.
+        """
         ids, last = [], ""
         while True:
-            r = await self.call("/v3/product/list", {"filter": {"visibility": "ALL"}, "last_id": last, "limit": 1000})
+            r = await self.call("/v3/product/list", {"filter": {"visibility": "VISIBLE_WITH_FBO_STOCK"}, "last_id": last,
+                                                     "limit": 1000})
             items = r["result"]["items"]
             ids += [str(i["product_id"]) for i in items]
             last = r["result"].get("last_id")
@@ -74,8 +78,12 @@ class Ozon:
                 sku = it.get("sku") or next((s["sku"] for s in it.get("sources", []) if s.get("sku")), None)
                 if not sku:
                     continue  # товар без SKU ещё не прошёл модерацию — ни цен, ни скидок
+                fbo = sum(x.get("present") or 0 for x in (it.get("stocks") or {}).get("stocks", [])
+                          if (x.get("source") or "").lower() == "fbo")
+                if not fbo:
+                    continue  # фильтр Ozon мог отстать: проверяем остаток FBO ещё раз
                 out.append({"product_id": it["id"], "offer_id": it["offer_id"], "sku": int(sku),
-                            "name": it.get("name", ""),
+                            "name": it.get("name", ""), "fbo": fbo,
                             "cat": types.get(it.get("type_id")) or types.get(("c", it.get("description_category_id")))
                             or "Без категории"})
         return out
