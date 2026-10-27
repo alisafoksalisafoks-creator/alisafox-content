@@ -109,18 +109,15 @@ def validate_steps(steps):
     return steps
 
 
-def editor_text(title, orig, draft, note="", price=None):
+def editor_text(title, orig, draft, note=""):
     """Экран редактора уровней: что сейчас в Ozon и что будет после сохранения. title уже экранирован."""
     lines = [f"📦 Скидка от количества: <b>{title}</b>",
              f"Сейчас в Ozon: {'у товаров разные уровни' if note else fmt_steps(orig)}"]
     if note:
         lines.append(note)
-    if price:
-        lines.append(f"Цена за единицу сейчас: {rub(price)}")
     lines += ["", "<b>Будет после сохранения:</b>"]
     if draft:
-        lines += [f"{i}) от {q} шт −{d}%" + (f" → {rub(price * (1 - d / 100))} за шт" if price else "")
-                  for i, (q, d) in enumerate(draft, 1)]
+        lines += [f"{i}) от {q} шт −{d}%" for i, (q, d) in enumerate(draft, 1)]
     else:
         lines.append("без скидки от количества")
     try:

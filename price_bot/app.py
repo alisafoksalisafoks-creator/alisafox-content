@@ -320,11 +320,8 @@ async def open_editor(cb: CallbackQuery, pids, title, back):
     orig = list(variants.pop()) if len(variants) == 1 else []
     note = "" if len(targets) == 1 or len(variants) == 0 else \
         "⚠️ У товаров категории сейчас разные уровни. После сохранения у всех станут одинаковые."
-    price = None
-    if len(targets) == 1:  # цена за штуку по уровням — как в кабинете Ozon; у категории цены разные
-        price = (await ozon.prices([targets[0]["product_id"]])).get(targets[0]["product_id"], {}).get("price")
     drafts[cb.from_user.id] = {"targets": [t["product_id"] for t in targets], "title": title, "back": back,
-                               "price": price,
+
                                "orig": orig, "steps": [list(x) for x in orig], "note": note,
                                "current": {t["sku"]: current.get(t["sku"]) for t in targets}}
     await show_editor(cb.message, cb.from_user.id, edit=False)
@@ -350,7 +347,7 @@ def editor_kb(dr):
 
 async def show_editor(msg: Message, uid, edit=True):
     dr = drafts[uid]
-    text = calc.editor_text(dr["title"], dr["orig"], dr["steps"], dr["note"], dr.get("price"))
+    text = calc.editor_text(dr["title"], dr["orig"], dr["steps"], dr["note"])
     if not edit:
         return await msg.answer(text, reply_markup=editor_kb(dr))
     try:

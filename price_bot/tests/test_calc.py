@@ -51,9 +51,6 @@ class TestHistory(unittest.TestCase):
              "new": [[2, 7], [3, 8]]}
         self.assertIn("от 2 шт −7% → от 2 шт −7%, от 3 шт −8%", calc.fmt_history(e))
 
-    def test_editor_price_per_piece(self):
-        self.assertIn("1) от 2 шт −7% → 1 581 ₽ за шт", calc.editor_text("x", [(2, 7)], [[2, 7]], price=1700))
-
 
 class TestPrice(unittest.TestCase):
     def test_parse(self):
