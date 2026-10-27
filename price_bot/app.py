@@ -171,9 +171,10 @@ async def collect(p):
     t, y = today(), today() - dt.timedelta(days=1)
     snap_y = store.snapshot(y.isoformat()).get(sku, {})
     snap_t = store.snapshot(t.isoformat()).get(sku, {})
-    d["soinvest"], d["soinvest_at"], d["soinvest_src"] = (snap_t.get("soinvest"), snap_t.get("soinvest_at"),
-                                                          snap_t.get("site_src"))
-    d["soinvest_y"] = snap_y.get("soinvest")
+    if "заказов" not in (snap_t.get("site_src") or ""):  # старые снимки по средней цене заказов — неверные, ≈0%
+        d["soinvest"], d["soinvest_at"] = snap_t.get("soinvest"), snap_t.get("soinvest_at")
+    if "заказов" not in (snap_y.get("site_src") or ""):
+        d["soinvest_y"] = snap_y.get("soinvest")
     d["position"] = snap_t.get("position")
     d["position_y"] = snap_y.get("position")
     if d["position"] is None and d["position_y"] is not None:
@@ -601,14 +602,14 @@ SOINVEST_AT = (9, 15, 23)  # часы по Москве, когда бот са�
 
 
 async def soinvest_job():
-    """Соинвест по всем товарам 3 раза в день (9:00, 15:00, 23:00 МСК): 1–2 запроса аналитики на все SKU сразу."""
-    first = not any("soinvest" in v for v in store.snapshot(today().isoformat()).values())
+    """Соинвест по всем товарам 3 раза в день (9:00, 15:00, 23:00 МСК)."""
+    first = True  # после запуска считаем сразу
     while True:
         now = dt.datetime.now(MSK)
         nxt = now if first else min(now.replace(hour=h, minute=0, second=0, microsecond=0) + dt.timedelta(days=d)
                   for h in SOINVEST_AT for d in (0, 1)
                   if now.replace(hour=h, minute=0, second=0, microsecond=0) + dt.timedelta(days=d) > now)
-        first = False  # после запуска считаем сразу, если за сегодня ещё не считали
+        first = False
         await asyncio.sleep((nxt - now).total_seconds())
         try:
             res = await soinvest(await items())
@@ -621,33 +622,20 @@ async def soinvest_job():
 async def soinvest(goods):
     """{sku: {seller_price, site_price, site_src, soinvest}} и запись в снимок дня.
 
-    Цена для покупателя: «Цена с картой» из акций Ozon (это не аналитика, лимит не тратит). Нет её — средняя цена
-    заказов за сегодня, затем за вчера из аналитики Ozon: один запрос на все SKU.
+    Цена для покупателя — «Цена с картой» из акций Ozon (не аналитика, лимиты не тратит). Средняя цена заказов
+    из аналитики не подходит: «Заказано на сумму» Ozon считает по вашей цене, соинвест по ней всегда ≈0%.
     """
     pids = [g["product_id"] for g in goods]
     pr, acts = await asyncio.gather(ozon.prices(pids), cached("actions", 1800, ozon.actions), return_exceptions=True)
     pr = pr if isinstance(pr, dict) else {}
     site = acts["site"] if isinstance(acts, dict) else {}
-    t, y = today(), today() - dt.timedelta(days=1)
-    need = [g for g in goods if not site.get(g["product_id"])]
-    avg = {}
-    for day, label in ((t, "сегодня"), (y, "вчера")):
-        left = [g for g in need if g["sku"] not in avg]
-        if not left:
-            break
-        got = await safe(analytics("avg", day, ozon.avg_prices, ttl=3600 if day == t else 86400))
-        for g in left:
-            if got.get(g["sku"]):
-                a, n = got[g["sku"]]
-                avg[g["sku"]] = (a, f"средняя цена заказов {label}, {n} шт")
+    t = today()
     out, save = {}, {}
     stamp = dt.datetime.now(MSK).strftime("%H:%M")
     for g in goods:
         r = {"seller_price": (pr.get(g["product_id"]) or {}).get("seller_price")}
         if site.get(g["product_id"]):
             r["site_price"], r["site_src"] = site[g["product_id"]], "цена с картой на сайте"
-        elif g["sku"] in avg:
-            r["site_price"], r["site_src"] = avg[g["sku"]]
         r["soinvest"] = calc.soinvest(r["seller_price"], r.get("site_price"))
         if r["soinvest"] is not None:
             save[g["sku"]] = {"soinvest": r["soinvest"], "soinvest_at": stamp, "site_src": r["site_src"]}

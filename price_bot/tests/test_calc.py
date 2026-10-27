@@ -142,10 +142,9 @@ class TestScreens(unittest.TestCase):
                      "🔴 ▼ −2,7 п.п.", "от 2 шт −5%", "🟢 ▼ −2"):
             self.assertIn(part, text)
 
-    def test_dashboard_soinvest_from_orders(self):
-        text = calc.dashboard(P, {"soinvest": 8.7, "soinvest_at": "15:00", "soinvest_y": 9.0,
-                                  "soinvest_src": "средняя цена заказов сегодня, 3 шт"})
-        self.assertIn("Соинвест (на 15:00 по средней цене заказов, примерно): ≈8,7%", text)
+    def test_dashboard_soinvest(self):
+        text = calc.dashboard(P, {"soinvest": 8.7, "soinvest_at": "15:00", "soinvest_y": 9.0})
+        self.assertIn("Соинвест (на 15:00): ≈8,7%", text)
         self.assertIn("9:00, 15:00 и 23:00", calc.dashboard(P, {}))
 
     def test_dashboard_empty(self):

@@ -138,12 +138,15 @@ class TestOzon(unittest.TestCase):
         self.assertEqual(_card_price({"price": {"amount": "837"}}), 837.0)
         self.assertIsNone(_card_price(None))
 
-    def test_avg_prices_from_analytics(self):
-        o = Fake({"/v1/analytics/data": {"result": {"data": [
-            {"dimensions": [{"id": "5"}], "metrics": [4770, 3]},
-            {"dimensions": [{"id": "6"}], "metrics": [0, 0]}]}}})
-        self.assertEqual(run(o.avg_prices("2026-10-27")), {5: (1590.0, 3)})
-        self.assertEqual(o.sent[0][1]["metrics"], ["revenue", "ordered_units"])
+    def test_action_pages_by_100(self):
+        pages = {"": {"products": [{"id": i, "price_min_elastic": 900} for i in range(100)], "last_id": "p2"},
+                 "p2": {"products": [{"id": 100, "price_min_elastic": 900}], "last_id": ""}}
+        o = Fake({"/v1/actions": {"result": [{"id": 1, "title": "Эластичный бустинг"}]},
+                  "/v2/actions/products": lambda b: pages[b.get("last_id", "")],
+                  "/v2/actions/candidates": {"products": []}})
+        r = run(o.actions())
+        self.assertEqual(len(r["elastic"]), 101)
+        self.assertTrue(all(b["limit"] <= 100 for path, b in o.sent if path.startswith("/v2/actions")))
 
     def test_set_price_errors(self):
         o = Fake({"/v1/product/import/prices": {"result": [{"updated": False, "errors": [{"message": "old_price"}]}]}})
