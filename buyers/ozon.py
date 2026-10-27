@@ -79,6 +79,21 @@ class Ozon:
             for p in self._pages(path, since, to):
                 yield from _lines(p, scheme)
 
+    def queries(self, skus, date_from, date_to):
+        """Поисковые запросы по артикулам за период — по всему кабинету, не по покупателю.
+        Ozon отдаёт до 15 запросов на артикул (самые частые по ищущим); сортировка по заказам не работает."""
+        out, page = [], 0
+        while True:
+            d = self.post("/v1/analytics/product-queries/details", {
+                "date_from": f"{date_from}T00:00:00Z", "date_to": f"{date_to}T23:59:59Z",
+                "skus": [str(s) for s in skus], "page": page, "page_size": 100,
+                "sort_by": "BY_SEARCHES", "sort_dir": "DESC", "limit_by_sku": 15})
+            out += d.get("queries") or []
+            page += 1
+            if page >= (d.get("page_count") or 0):
+                return out
+            time.sleep(1.1)  # лимит аналитики ~1 запрос в секунду
+
     def fbo_customer_prices(self, posting_number):
         """{sku: цена для покупателя за 1 шт.} для отправления FBO."""
         d = self.post("/v2/posting/fbo/get", {"posting_number": posting_number, "with": {"financial_data": True}})

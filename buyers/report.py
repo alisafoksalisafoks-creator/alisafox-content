@@ -90,6 +90,24 @@ def fill_customer_prices(db, oz, lines):
                 x["customer_price"] = r[0] if r else None
 
 
+def keys_period(start, end):
+    """Аналитика запросов Ozon готова только по позавчера: обрезаем период, «сегодня» → прошлые 7 дней."""
+    edge = today() - timedelta(days=2)
+    e = min(end, edge)
+    s = start if start <= e else e - timedelta(days=6)
+    return s, e
+
+
+def top_keys(oz, skus, start, end, n=5):
+    """{sku: [(запрос, заказов, место)]} — топ-n по заказам за период, только запросы с заказами."""
+    by = defaultdict(list)
+    for i in range(0, len(skus), 1000):
+        for q in oz.queries(skus[i:i + 1000], start, end):
+            if q.get("order_count"):
+                by[q["sku"]].append((q.get("query", ""), int(q["order_count"]), q.get("position")))
+    return {s: sorted(v, key=lambda t: -t[1])[:n] for s, v in by.items()}
+
+
 # --- сводки ---
 
 def active(lines):
@@ -126,7 +144,8 @@ def details(lines):
     g = {}
     for x in active(lines):
         k = (x["buyer"], x["offer_id"] or str(x["sku"]))
-        r = g.setdefault(k, {"buyer": x["buyer"], "offer_id": k[1], "name": x["name"], "qty": 0, "sum": 0.0,
+        r = g.setdefault(k, {"buyer": x["buyer"], "sku": x["sku"], "offer_id": k[1], "name": x["name"], "qty": 0,
+                             "sum": 0.0,
                              "paid": 0.0})
         r["qty"] += x["qty"]
         r["sum"] += x["price"] * x["qty"]

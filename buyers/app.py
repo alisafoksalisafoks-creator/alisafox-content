@@ -6,6 +6,7 @@
 OZON_BOT_CLIENT_ID / OZON_BOT_API_KEY (или OZON_CLIENT_ID / OZON_API_KEY); необязательно BUYERS_DB.
 
 Меню: 👥 Покупатели, ➕ Добавить ID, ✏️ Редактировать (имя → изменить имя / удалить). Покупатели → имя (или «Все») → Сегодня / 7 дней / Месяц → 🔢 В штуках / 📋 Подробнее.
+«🔑 Ключи» — топ-5 запросов по заказам для каждого купленного артикула (по всему кабинету).
 «В штуках» — только число по дням (у «Все» — по именам). «Подробнее» — артикул, штуки, сумма в заказе
 и сколько заплатил покупатель. Отменённые заказы в штуки не идут, пишутся примечанием.
 """
@@ -125,7 +126,8 @@ def edit_kb():
 
 
 def views_kb(who, kind):
-    return kb([[("🔢 В штуках", f"v:{who}:{kind}:q"), ("📋 Подробнее", f"v:{who}:{kind}:d")],
+    return kb([[("🔢 В штуках", f"v:{who}:{kind}:q"), ("📋 Подробнее", f"v:{who}:{kind}:d"),
+                ("🔑 Ключи", f"v:{who}:{kind}:k")],
                [("⬅️ Период", f"b:{who}"), ("👥 Покупатели", "b"), ("🏠 Меню", "menu")]])
 
 
@@ -148,6 +150,8 @@ def build(who, kind, view, prefix):
     caption = f"{name} · {label}: {qty} шт., заказов {orders}, в заказах {money(total)}" + \
               (f"\nОтменено {canc} шт." if canc else "")
 
+    if view == "k":
+        return keys_report(name, lines, start, end, prefix)
     if view == "q" and who == "all":
         q = report.by_buyer(lines, ids)
         rows = [[short(store.buyer_name(db, b), 30), str(b), n] for b, n in sorted(q.items(), key=lambda t: -t[1])]
@@ -181,6 +185,33 @@ def build(who, kind, view, prefix):
         paths = render.table_png(f"{name} · подробнее", label, cols, rows, prefix, total=tot, note=note)
         if paid is not None:
             caption += f", заплатили {money(paid)}"
+    return paths, caption
+
+
+def keys_report(name, lines, start, end, prefix):
+    """Топ-5 запросов по заказам для каждого артикула, который купил покупатель. Запросы — по всему кабинету."""
+    det = report.details(lines)
+    seen, arts = set(), []
+    for r in det:
+        if r["sku"] not in seen:
+            seen.add(r["sku"])
+            arts.append(r)
+    ks, ke = report.keys_period(start, end)
+    keys = report.top_keys(oz, [r["sku"] for r in arts], ks, ke) if arts else {}
+    rows = []
+    for r in arts:
+        top = keys.get(r["sku"]) or [("нет запросов с заказами", "", "")]
+        for i, (q, n, pos) in enumerate(top):
+            rows.append([short(r["offer_id"], 16) if i == 0 else "", short(q, 26), n,
+                         "—" if not pos else f"{float(pos):.0f}"])
+    note = ("Запросы — по всему кабинету Ozon, не только этого покупателя: Ozon не пишет в заказ, по какому\n"
+            "запросу его нашли. Топ-5 по заказам из 15 самых частых запросов артикула. Место — средняя позиция.")
+    paths = render.table_png(f"{name} · ключи", f"запросы {ks:%d.%m}–{ke:%d.%m}",
+                             [(0.04, "Артикул", "left"), (0.36, "Запрос", "left"), (0.84, "заказов", "right"),
+                              (0.97, "место", "right")], rows, prefix, note=note, empty="Покупок нет")
+    caption = f"{name} · ключи по {len(arts)} артикулам, запросы за {ks:%d.%m}–{ke:%d.%m}"
+    if (ks, ke) != (start, end):
+        caption += "\nАналитика запросов Ozon готова только по позавчера — период сдвинут."
     return paths, caption
 
 
