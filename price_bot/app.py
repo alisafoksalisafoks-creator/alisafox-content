@@ -39,6 +39,7 @@ PAGE = 20  # кнопок на странице списка
 
 PRICES = "💰 Цены"
 QTY = "📦 Скидка от количества"
+REFRESH = "🔄 Обновить остатки"
 ACCESS = "👥 Доступ"
 
 dp = Dispatcher()
@@ -57,7 +58,7 @@ def allowed(user_id):
 
 def menu(user_id):
     rows = [[KeyboardButton(text=PRICES), KeyboardButton(text=QTY)],
-            *([[KeyboardButton(text=ACCESS)]] if user_id == OWNER else [])]
+            [KeyboardButton(text=REFRESH)] + ([KeyboardButton(text=ACCESS)] if user_id == OWNER else [])]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 
@@ -278,7 +279,7 @@ async def show_product(msg: Message, sec, pid, edit=True):
     goods = await items()
     p = product(goods, pid)
     if not p:
-        return await msg.answer("Товар больше не в продаже или закончился на складе Ozon.", reply_markup=nav_kb())
+        return await msg.answer("Товар больше не в продаже или закончился на складе Ozon. Нажмите «Обновить остатки».", reply_markup=nav_kb())
     ci = categories(goods).index(p["cat"])
     back = ("⬅️ Назад", f"ca:{sec}:{ci}:0")
     if sec == "p":
@@ -431,17 +432,6 @@ def cancel_kb(back):
 
 # --- снимки на каждый день: соинвест и место в выдаче ---
 
-async def catalog_loop():
-    """Раз в час перечитывает товары из Ozon: в боте только то, что в продаже и есть на складах Ozon."""
-    while True:
-        await asyncio.sleep(3600)
-        try:
-            await refresh_catalog()
-            cache.pop("elastic", None)
-        except Exception:
-            log.exception("каталог не обновился")
-
-
 async def daily_snapshots():
     """Каждые 3 часа сохраняет соинвест и место в выдаче по всем SKU — для сравнения «сегодня / вчера»."""
     while True:
@@ -478,6 +468,21 @@ async def on_section(msg: Message):
         await show_categories(msg, "p" if msg.text == PRICES else "q")
     except OzonError as e:
         await msg.answer(f"Ozon не отдал товары: {e}")
+
+
+@dp.message(F.text == REFRESH)
+async def on_refresh(msg: Message):
+    """Список товаров обновляется только по этой кнопке: в боте — то, что в продаже и есть на складах Ozon."""
+    if not allowed(msg.from_user.id):
+        return
+    wait = await msg.answer("Обновляю остатки из Ozon…")
+    try:
+        goods = await refresh_catalog()
+    except OzonError as e:
+        return await wait.edit_text(f"Не получилось: {e}")
+    cache.pop("elastic", None)
+    await wait.edit_text(f"Готово: {len(goods)} товаров в продаже с остатком на складах Ozon, "
+                         f"{len(categories(goods))} категорий.", reply_markup=nav_kb())
 
 
 @dp.message(F.text == ACCESS)
@@ -582,7 +587,6 @@ async def main():
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     ozon = Ozon()
     asyncio.create_task(daily_snapshots())
-    asyncio.create_task(catalog_loop())
     try:
         await dp.start_polling(bot)
     finally:
