@@ -108,6 +108,44 @@ def top_keys(oz, skus, start, end, n=5):
     return {s: sorted(v, key=lambda t: -t[1])[:n] for s, v in by.items()}
 
 
+POS_TTL = timedelta(hours=6)  # вчерашнее место Ozon досчитывает утром — перечитываем раз в 6 часов
+
+
+def positions_period(kind):
+    """Места есть только по вчера: 7 дней — как у отчётов, месяц — с 1-го по вчера."""
+    s, e, _ = period(kind)
+    y = today() - timedelta(days=1)
+    e = min(e, y)
+    s = min(s, e)
+    return s, e
+
+
+def sync_positions(db, oz, start, end):
+    """Места всех SKU кабинета по дням, в базе. Докачиваем только недостающие дни и последние 2 дня раз в 6 часов."""
+    have = {r[0] for r in db.execute("select distinct day from positions where day between ? and ?",
+                                     (str(start), str(end)))}
+    at = store.get_meta(db, "pos_at")
+    stale = not at or datetime.now(MSK) - datetime.fromisoformat(at) > POS_TTL
+    need = [start + timedelta(days=i) for i in range((end - start).days + 1)
+            if str(start + timedelta(days=i)) not in have or (stale and start + timedelta(days=i) >= end - timedelta(days=1))]
+    if not need:
+        return
+    for sku, day, pos, views in oz.positions(min(need), max(need)):
+        db.execute("insert or replace into positions values (?, ?, ?, ?)", (sku, day, pos, views))
+    db.commit()
+    store.set_meta(db, "pos_at", datetime.now(MSK).isoformat())
+
+
+def position_matrix(db, skus, start, end):
+    """{sku: {день: место или None}}."""
+    q = ",".join("?" * len(skus))
+    out = {s: {} for s in skus}
+    for sku, day, pos in db.execute(f"select sku, day, pos from positions where sku in ({q}) and day between ? and ?",
+                                    (*skus, str(start), str(end))):
+        out[sku][day] = pos
+    return out
+
+
 # --- сводки ---
 
 def active(lines):

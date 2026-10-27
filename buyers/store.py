@@ -16,6 +16,7 @@ create table if not exists lines (
 create index if not exists lines_buyer on lines (buyer, day);
 create table if not exists buyers (id integer primary key, name text, added text);
 create table if not exists users (id integer primary key, name text, added text);
+create table if not exists positions (sku integer, day text, pos real, views integer, primary key (sku, day));
 create table if not exists meta (key text primary key, value text);
 """
 

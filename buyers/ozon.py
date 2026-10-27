@@ -94,6 +94,23 @@ class Ozon:
                 return out
             time.sleep(1.1)  # лимит аналитики ~1 запрос в секунду
 
+    def positions(self, date_from, date_to):
+        """Средняя позиция в поиске и каталоге (position_category) по всем SKU кабинета по дням: [(sku, день, место, показы)].
+        0 — в этот день товар не показывался. Данные есть по вчера."""
+        out, offset = [], 0
+        while True:
+            d = self.post("/v1/analytics/data", {
+                "date_from": str(date_from), "date_to": str(date_to), "dimension": ["sku", "day"],
+                "metrics": ["position_category", "hits_view"], "limit": 1000, "offset": offset})
+            rows = (d.get("result") or {}).get("data") or []
+            for r in rows:
+                (sku, day), (pos, views) = [x["id"] for x in r["dimensions"]], r["metrics"]
+                out.append((int(sku), day, pos or None, int(views or 0)))
+            if len(rows) < 1000:
+                return out
+            offset += 1000
+            time.sleep(1.1)
+
     def fbo_customer_prices(self, posting_number):
         """{sku: цена для покупателя за 1 шт.} для отправления FBO."""
         d = self.post("/v2/posting/fbo/get", {"posting_number": posting_number, "with": {"financial_data": True}})

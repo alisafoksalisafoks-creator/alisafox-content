@@ -6,6 +6,7 @@
 OZON_BOT_CLIENT_ID / OZON_BOT_API_KEY (или OZON_CLIENT_ID / OZON_API_KEY); необязательно BUYERS_DB.
 
 Меню: 👥 Покупатели, ➕ Добавить ID, ✏️ Редактировать (имя → изменить имя / удалить). Покупатели → имя (или «Все») → Сегодня / 7 дней / Месяц → 🔢 В штуках / 📋 Подробнее.
+«📍 Места в выдаче» (старт) — 7 дней / месяц: артикулы, купленные покупателями из списка, × дни, место за день.
 «🔑 Ключи» — топ-5 запросов по заказам для каждого купленного артикула (по всему кабинету).
 «В штуках» — только число по дням (у «Все» — по именам). «Подробнее» — артикул, штуки, сумма в заказе
 и сколько заплатил покупатель. Отменённые заказы в штуки не идут, пишутся примечанием.
@@ -98,7 +99,7 @@ def who_is(u):
 # --- меню ---
 
 def main_menu(uid):
-    rows = [[("🛒 Выкупы сегодня", "v:all:today:q"), ("👥 Покупатели", "b")], [("➕ Добавить ID покупателя", "add"), ("✏️ Редактировать", "e")]]
+    rows = [[("🛒 Выкупы сегодня", "v:all:today:q"), ("👥 Покупатели", "b")], [("📍 Места в выдаче", "pos")], [("➕ Добавить ID покупателя", "add"), ("✏️ Редактировать", "e")]]
     if is_admin(uid):
         rows.append([("👤 Добавить пользователя в бот", "u")])
     return kb(rows)
@@ -219,15 +220,45 @@ def keys_report(name, lines, start, end, prefix):
     return paths, caption
 
 
+POS_NOTE = ("Средняя позиция артикула в поиске и каталоге Ozon за день: чем меньше, тем выше. «—» — не показывался.\n"
+            "Зелёный — поднялся к прошлому дню, красный — опустился. Артикулы — те, что купили покупатели из списка.")
+
+
+def positions(kind, prefix):
+    """Места в выдаче по дням для артикулов, которые купили отслеживаемые покупатели за период."""
+    start, end, label = report.period(kind)
+    ids = ids_of("all")
+    bought = {}
+    for x in report.active(store.buyer_lines(db, ids, start, end) if ids else []):
+        r = bought.setdefault(x["sku"], [x["offer_id"] or str(x["sku"]), 0])
+        r[1] += x["qty"]
+    ps, pe = report.positions_period(kind)
+    if bought:
+        report.sync_positions(db, oz, ps, pe)
+    m = report.position_matrix(db, list(bought), ps, pe) if bought else {}
+    items = [(off, m.get(sku, {})) for sku, (off, _) in sorted(bought.items(), key=lambda t: -t[1][1])]
+    days = [ps + timedelta(days=i) for i in range((pe - ps).days + 1)]
+    paths = render.matrix_png("Места в выдаче", f"{label} · места {ps:%d.%m}–{pe:%d.%m}", items, days, prefix,
+                              note=POS_NOTE)
+    caption = f"Места в выдаче · {len(items)} артикулов, которые купили покупатели из списка ({label})"
+    return paths, caption
+
+
 async def send_report(msg: Message, who, kind, view):
     tmp = tempfile.mkdtemp()
     try:
-        paths, caption = await asyncio.to_thread(locked, build, who, kind, view, os.path.join(tmp, "r"))
-        markup = views_kb(who, kind)
+        if view == "pos":
+            paths, caption = await asyncio.to_thread(locked, positions, kind, os.path.join(tmp, "r"))
+            markup = kb([[("7 дней", "ps:7"), (f"Месяц · {report.month_label()}", "ps:month")], [("🏠 Меню", "menu")]])
+        else:
+            paths, caption = await asyncio.to_thread(locked, build, who, kind, view, os.path.join(tmp, "r"))
+            markup = views_kb(who, kind)
         if len(paths) == 1:
             await msg.answer_photo(FSInputFile(paths[0]), caption=caption, reply_markup=markup)
         else:
-            await msg.bot.send_media_group(msg.chat.id, [InputMediaPhoto(media=FSInputFile(p)) for p in paths[:10]])
+            for i in range(0, len(paths), 10):  # в альбоме Telegram не больше 10 фото
+                await msg.bot.send_media_group(msg.chat.id, [InputMediaPhoto(media=FSInputFile(p))
+                                                             for p in paths[i:i + 10]])
             await msg.answer(caption, reply_markup=markup)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -280,6 +311,16 @@ async def button(cb: CallbackQuery):
                 await msg.answer("Докачиваю свежие заказы Ozon…")
                 await asyncio.to_thread(ensure_fresh)
             await send_report(msg, who, kind, view)
+        elif d == "pos":
+            await msg.answer("Места в выдаче артикулов, которые купили покупатели из списка. За какой период?",
+                             reply_markup=kb([[("7 дней", "ps:7"), (f"Месяц · {report.month_label()}", "ps:month")],
+                                              [("🏠 Меню", "menu")]]))
+        elif d.startswith("ps:"):
+            if state["loading"]:
+                return await msg.answer("Бот ещё загружает историю заказов. Нажмите чуть позже.")
+            await msg.answer("Собираю места в выдаче Ozon… Первый раз до 2 минут, потом быстрее.")
+            await asyncio.to_thread(ensure_fresh)
+            await send_report(msg, "all", d[3:], "pos")
         elif d == "add":
             waiting[uid] = ("add",)
             await msg.answer("Пришлите ID покупателя и имя одной строкой, например:\n47327265 Анна 1\n\n"
