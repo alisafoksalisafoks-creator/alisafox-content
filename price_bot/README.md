@@ -41,11 +41,7 @@ Telegram-бот для цен и скидки от количества на Ozo
 GIT_SSH_COMMAND="ssh -i /opt/supply-bot/.ssh/id_ed25519" git clone -b claude/project-thread-xqdb0s git@github.com:alisafoksalisafoks-creator/alisafox-content.git /opt/price-bot && bash /opt/price-bot/price_bot/deploy/install.sh
 ```
 
-3. Скрипт попросит ключи: `nano /opt/price-bot/.env` → токен бота, `OZON_CLIENT_ID`, `OZON_API_KEY`, `TRUESTATS_MCP_URL`, `TRUESTATS_API_KEY`. Сохранить Ctrl+O, Enter, выйти Ctrl+X. Затем ещё раз:
-
-```
-bash /opt/price-bot/price_bot/deploy/install.sh
-```
+3. Скрипт по очереди спросит ключи: токен бота, Ozon Client ID, Ozon API-ключ, адрес и ключ TrueStats (их можно пропустить Enter). Вставить — правая кнопка мыши, потом Enter. На экране ключи не видны, так и задумано. Поменять ключ потом: `nano /opt/price-bot/.env`.
 
 Должно появиться «price-bot: active».
 

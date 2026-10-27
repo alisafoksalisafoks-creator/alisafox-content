@@ -15,14 +15,27 @@ python3 -m venv .venv
 .venv/bin/pip install -q -r price_bot/requirements.txt
 mkdir -p /var/lib/price-bot
 
-need() { grep -q "^$1=." .env; }
-if [ ! -f .env ] || ! need TELEGRAM_PRICE_BOT_TOKEN || ! need OZON_CLIENT_ID || ! need OZON_API_KEY; then
-  [ -f .env ] || { cp price_bot/env.example .env; chmod 600 .env; }
-  echo
-  echo "=== Впишите токен бота, ключи Ozon и TrueStats: nano $DIR/.env  (сохранить: Ctrl+O, Enter, выйти: Ctrl+X) ==="
-  echo "=== Потом запустите этот скрипт ещё раз: bash $DIR/price_bot/deploy/install.sh ==="
-  exit 1
-fi
+[ -f .env ] || { cp price_bot/env.example .env; chmod 600 .env; }
+
+# спрашиваем ключи по очереди; уже вписанные не трогаем. Ввод не показывается на экране.
+ask() {
+  grep -q "^$1=." .env && return
+  local v=""
+  while [ -z "$v" ]; do
+    read -r -s -p "$2: " v </dev/tty; echo
+    v=$(echo "$v" | tr -d '[:space:]')
+    [ -z "$v" ] && [ -n "$3" ] && return  # необязательный ключ — можно пропустить Enter
+  done
+  grep -v "^$1=" .env > .env.tmp; echo "$1=$v" >> .env.tmp; mv .env.tmp .env; chmod 600 .env
+  echo "  ✓ сохранено"
+}
+echo
+echo "=== Вставьте ключи по очереди (правая кнопка мыши → Вставить, потом Enter). На экране они не видны — так и задумано. ==="
+ask TELEGRAM_PRICE_BOT_TOKEN "Токен бота от @BotFather"
+ask OZON_CLIENT_ID "Ozon Client ID"
+ask OZON_API_KEY "Ozon API-ключ"
+ask TRUESTATS_MCP_URL "Адрес API TrueStats (нет — просто Enter)" optional
+ask TRUESTATS_API_KEY "Ключ TrueStats (нет — просто Enter)" optional
 
 cp price_bot/deploy/price-bot.service /etc/systemd/system/
 systemctl daemon-reload
