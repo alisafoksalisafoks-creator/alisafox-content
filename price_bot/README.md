@@ -35,10 +35,10 @@ Telegram-бот для цен и скидки от количества на Ozo
 ## Установка на сервер Timeweb «AlisaFox»
 
 1. В @BotFather создайте нового бота (/newbot), скопируйте токен.
-2. Панель Timeweb → сервер «AlisaFox» → «Консоль», вход под root. Вставить и нажать Enter:
+2. Панель Timeweb → сервер «AlisaFox» → «Консоль», вход под root. Вставить и нажать Enter (скачивание идёт ключом бота поставок: у root своего доступа к GitHub нет):
 
 ```
-git clone -b claude/project-thread-xqdb0s git@github.com:alisafoksalisafoks-creator/alisafox-content.git /opt/price-bot; bash /opt/price-bot/price_bot/deploy/install.sh
+GIT_SSH_COMMAND="ssh -i /opt/supply-bot/.ssh/id_ed25519" git clone -b claude/project-thread-xqdb0s git@github.com:alisafoksalisafoks-creator/alisafox-content.git /opt/price-bot && bash /opt/price-bot/price_bot/deploy/install.sh
 ```
 
 3. Скрипт попросит ключи: `nano /opt/price-bot/.env` → токен бота, `OZON_CLIENT_ID`, `OZON_API_KEY`, `TRUESTATS_MCP_URL`, `TRUESTATS_API_KEY`. Сохранить Ctrl+O, Enter, выйти Ctrl+X. Затем ещё раз:
