@@ -99,6 +99,42 @@ def check_text(p, acts):
     return "\n".join(lines)
 
 
+def audit_text(goods, acts, prices):
+    """Ответ /audit: по всем артикулам — есть ли вилка бустинга, цена с картой и соинвест; где не хватает данных."""
+    el, site, seen = acts.get("elastic", {}), acts.get("site", {}), acts.get("seen", {})
+    groups = {"inside": [], "cand": [], "no_limit": [], "no_card": [], "no_si": []}
+    for g in goods:
+        pid, offer = g["product_id"], html.escape(g["offer_id"])
+        e = el.get(pid)
+        if e and e.get("in_action"):
+            groups["inside"].append(offer)
+        elif e:
+            groups["cand"].append(offer)
+        if e and not e.get("min_el") and not e.get("max_el"):
+            groups["no_limit"].append(offer)
+        if not site.get(pid):
+            groups["no_card"].append(offer + ("" if seen.get(pid) else " (нет ни в одной акции)"))
+        elif soinvest((prices.get(pid) or {}).get("seller_price"), site[pid]) is None:
+            groups["no_si"].append(offer)
+    n = len(goods)
+    lines = [f"🔍 Проверка {n} артикулов с остатком FBO (по API, сейчас)", "",
+             f"✅ В «Эластичном бустинге» участвуют: {len(groups['inside'])}",
+             f"🎯 Могут участвовать, бот покажет порог: {len(groups['cand'])}",
+             f"🤝 Соинвест считается: {n - len(groups['no_card']) - len(groups['no_si'])}"]
+    for key, title in (("no_limit", "⚠️ В бустинге, но Ozon не отдал порог цены"),
+                       ("no_card", "⚠️ Нет цены с картой — соинвест не посчитать"),
+                       ("no_si", "⚠️ Нет вашей цены с акциями — соинвест не посчитать")):
+        if groups[key]:
+            lines += ["", f"{title} ({len(groups[key])}):", ", ".join(groups[key][:40])
+                      + (f" и ещё {len(groups[key]) - 40}" if len(groups[key]) > 40 else "")]
+    if acts.get("errors"):
+        lines += ["", f"❌ Не ответили акции ({len(acts['errors'])}):"] + \
+                 [f"• {html.escape(x[:150])}" for x in acts["errors"][:10]]
+    else:
+        lines += ["", "Ошибок от Ozon нет."]
+    return "\n".join(lines)
+
+
 def fmt_stock(s):
     if not s:
         return "🏬 Остаток: нет данных Ozon"

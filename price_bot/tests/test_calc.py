@@ -120,6 +120,19 @@ class TestCheck(unittest.TestCase):
         self.assertIn("ни в одной акции", calc.check_text(p, {"seen": {}, "elastic": {}}))
 
 
+class TestAudit(unittest.TestCase):
+    def test_groups(self):
+        goods = [{"product_id": i, "offer_id": f"A{i}"} for i in (1, 2, 3, 4)]
+        acts = {"elastic": {1: {"in_action": True, "min_el": 900}, 2: {"in_action": False}},
+                "site": {1: 800, 2: 700, 4: 600}, "seen": {1: [1], 2: [1], 4: [1]}, "errors": []}
+        prices = {1: {"seller_price": 1000}, 2: {"seller_price": 1000}}
+        text = calc.audit_text(goods, acts, prices)
+        for part in ("участвуют: 1", "Могут участвовать, бот покажет порог: 1", "Соинвест считается: 2",
+                     "не отдал порог цены (1):\nA2", "A3 (нет ни в одной акции)", "Нет вашей цены с акциями",
+                     "Ошибок от Ozon нет"):
+            self.assertIn(part, text)
+
+
 class TestTrend(unittest.TestCase):
     def test_position_lower_is_better(self):
         self.assertTrue(calc.trend(5, 7, lower_is_better=True).startswith("🟢 ▼"))

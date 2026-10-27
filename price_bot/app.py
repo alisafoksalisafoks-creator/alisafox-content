@@ -708,6 +708,22 @@ async def on_refresh(msg: Message):
                          f"{len(categories(goods))} категорий.", reply_markup=nav_kb())
 
 
+@dp.message(Command("audit"))
+async def on_audit(msg: Message):
+    """/audit — проверка всех артикулов: участие в бустинге, порог, цена с картой, соинвест, ошибки Ozon."""
+    if not allowed(msg.from_user.id):
+        return
+    wait = await msg.answer("Проверяю все артикулы по API Ozon, это 1–3 минуты…")
+    cache.pop("actions", None)
+    try:
+        goods = await items()
+        acts, prices = await asyncio.gather(cached("actions", 1800, ozon.actions),
+                                            ozon.prices([g["product_id"] for g in goods]))
+    except Exception as e:  # noqa: BLE001
+        return await wait.edit_text(f"Ozon не ответил: {html.escape(str(e) or repr(e))}", reply_markup=nav_kb())
+    await wait.edit_text(calc.audit_text(goods, acts, prices), reply_markup=nav_kb())
+
+
 @dp.message(Command("check"))
 async def on_check(msg: Message):
     """/check АРТИКУЛ — что Ozon по API отдаёт по товару во всех акциях: вилка бустинга и цена на сайте."""
