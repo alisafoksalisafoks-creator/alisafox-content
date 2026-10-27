@@ -22,7 +22,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
                            Message)
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from bot import cards, dashboard, keywords, morning, positions, profit, restock, signals, store
+from bot import cards, coinvest, dashboard, keywords, morning, positions, profit, restock, signals, store
 from bot.category_report import MSK
 from bot.sources import gsheet_costs
 from bot.sources.moysklad import Catalog, is_test
@@ -62,7 +62,7 @@ MENU = kb([[("📊 Сводка за вчера", "morning")],
            [("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
            [("🚦 Сигналы по остаткам", "sig")],
            [("📍 Позиции", "pos"), ("🔑 Ключи", "kw")],
-           [("📉 Минусовые артикулы", "neg")]])
+           [("📉 Минусовые артикулы", "neg"), ("🤝 Соинвест", "co")]])
 KW_MENU = kb([[("📂 Категория", "kw:c"), ("🔎 Артикул", "kw:a")], [("⬅️ Меню", "menu")]])
 SIGNALS_MENU = kb([[("⏰ Пора отгрузить", "sig:s")], [("🔀 Пересорт", "sig:x")],
                    [("💸 Платное хранение", "sig:p")], [("🔎 По артикулу", "sig:a")], [("⬅️ Меню", "menu")]])
@@ -432,6 +432,62 @@ def kw_prefetch():
     log.info("ключи загружены: %s SKU по %s", len(skus), end)
 
 
+_coinvest = {"at": 0.0}
+
+
+async def coinvest_end(msg: Message):
+    """Последний день с отчётом о реализации; раз в час докачивает новые дни."""
+    if time.time() - _coinvest["at"] > SIGNALS_TTL:
+        await msg.answer("Собираю отчёты Ozon о реализации за 2 недели…")
+        await asyncio.to_thread(coinvest.refresh, db, oz, yesterday())
+        _coinvest["at"] = time.time()
+    day = db.execute("select max(day) from coinvest_days").fetchone()[0]
+    return date.fromisoformat(day) if day else None
+
+
+def coinvest_sub(end):
+    return f"Ozon · вчера = {end:%d.%m} к {end - timedelta(days=1):%d.%m} · 7 дн к прошлым 7"
+
+
+def pp_label(x):
+    p, d = x.get("pct"), x.get("delta")
+    return ("—" if p is None else f"{p:.0f}%") + ("" if d is None else f" {'▲' if d >= 0.5 else '▼' if d <= -0.5 else '≈'}{d:+.1f}")
+
+
+async def coinvest_menu(msg: Message):
+    end = await coinvest_end(msg)
+    if not end:
+        return await msg.answer("Ozon пока не отдал отчёты о реализации. Попробуйте позже.", reply_markup=MENU)
+    rows = coinvest.table(db, end, "type")
+    await send_png(msg, lambda p: dashboard.coinvest_png("Соинвест по категориям", coinvest_sub(end), rows, p),
+                   "Соинвест Ozon по категориям")
+    await msg.answer("Выберите категорию — покажу артикулы (вчера · к позавчера):", reply_markup=kb(
+        [[(f"{dashboard.short(r['name'], 24)} · {pp_label(r.get('Вчера') or {})}", f"co:c:{r['key']}")]
+         for r in rows[:40] if r["key"] != "-"] + [[("⬅️ Меню", "menu")]]))
+
+
+async def coinvest_category(msg: Message, type_id):
+    end = await coinvest_end(msg)
+    rows = coinvest.table(db, end, "sku", type_id)
+    name = db.execute("select type_name from sku where type_id = ? limit 1", (type_id,)).fetchone()
+    title = dashboard.short(name[0] if name else "Категория", 30)
+    await send_png(msg, lambda p: dashboard.coinvest_png(title, coinvest_sub(end), rows, p, by="sku"), f"Соинвест: {title}")
+    await msg.answer("Нажмите на артикул — покажу по дням:", reply_markup=kb(
+        [[(f"{(r['offer_id'] or r['key'])[:20]} · {pp_label(r.get('Вчера') or {})}", f"co:s:{r['key']}")]
+         for r in rows[:40]] + [[("⬅️ Категории", "co"), ("⬅️ Меню", "menu")]]))
+
+
+async def coinvest_sku(msg: Message, sku):
+    end = await coinvest_end(msg)
+    tid = db.execute("select type_id from sku where sku = ?", (sku,)).fetchone()
+    r = next((x for x in coinvest.table(db, end, "sku", tid[0] if tid else None) if x["key"] == sku), None)
+    if not r:
+        return await msg.answer("По этому артикулу продаж за 2 недели нет.", reply_markup=MENU)
+    await send_png(msg, lambda p: dashboard.coinvest_sku_png(r, coinvest.daily(db, sku, end), end, p),
+                   f"Соинвест: {r['offer_id'] or sku}", kb([[("⬅️ Категория", f"co:c:{tid[0]}" if tid else "co"),
+                                                             ("⬅️ Меню", "menu")]]))
+
+
 def render_morning(prefix):
     return dashboard.morning_png(morning.build(db, oz, data_day()), prefix)
 
@@ -506,6 +562,12 @@ async def on_button(cb: CallbackQuery):
     elif d == "ask_sku":
         waiting[cb.from_user.id] = "card"
         await msg.answer("Пришлите артикул (например OZ353NEW2) или SKU Ozon.")
+    elif d == "co":
+        await coinvest_menu(msg)
+    elif d.startswith("co:c:"):
+        await coinvest_category(msg, d[5:])
+    elif d.startswith("co:s:"):
+        await coinvest_sku(msg, d[5:])
     elif d == "neg":
         await losses_menu(msg)
     elif d.startswith("neg:c:"):
@@ -737,6 +799,10 @@ def refresh_data():
     except Exception:
         log.exception("таблица себестоимости не прочиталась, работаю со старым файлом")
     store.refresh(db, yesterday(), oz)
+    try:
+        coinvest.refresh(db, oz, yesterday())
+    except Exception:
+        log.exception("соинвест не обновился")
     store.set_offer_ids(db, oz.stocks())
     log.info("данные обновлены по %s", store.last_day(db))
 
