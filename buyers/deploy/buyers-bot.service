@@ -1,0 +1,15 @@
+[Unit]
+Description=AlisaFox бот «Покупатели» (покупки отслеживаемых ID Ozon)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/buyers-bot
+EnvironmentFile=/opt/buyers-bot/.env
+ExecStart=/opt/buyers-bot/.venv/bin/python -m buyers.app
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
