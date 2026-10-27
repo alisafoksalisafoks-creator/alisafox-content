@@ -5,7 +5,7 @@
 Переменные окружения: TELEGRAM_BOT_TOKEN (токен этого бота), TELEGRAM_CHAT_ID (владелец),
 OZON_BOT_CLIENT_ID / OZON_BOT_API_KEY (или OZON_CLIENT_ID / OZON_API_KEY); необязательно BUYERS_DB.
 
-Меню: 👥 Покупатели → имя (или «Все») → Сегодня / 7 дней / Месяц → 🔢 В штуках / 📋 Подробнее.
+Меню: 👥 Покупатели, ➕ Добавить ID, ✏️ Редактировать (имя → изменить имя / удалить). Покупатели → имя (или «Все») → Сегодня / 7 дней / Месяц → 🔢 В штуках / 📋 Подробнее.
 «В штуках» — только число по дням (у «Все» — по именам). «Подробнее» — артикул, штуки, сумма в заказе
 и сколько заплатил покупатель. Отменённые заказы в штуки не идут, пишутся примечанием.
 """
@@ -97,7 +97,7 @@ def who_is(u):
 # --- меню ---
 
 def main_menu(uid):
-    rows = [[("👥 Покупатели", "b")], [("➕ Добавить ID покупателя", "add")]]
+    rows = [[("👥 Покупатели", "b")], [("➕ Добавить ID покупателя", "add"), ("✏️ Редактировать", "e")]]
     if is_admin(uid):
         rows.append([("👤 Добавить пользователя в бот", "u")])
     return kb(rows)
@@ -114,9 +114,14 @@ def buyers_kb():
 def periods_kb(who):
     rows = [[("Сегодня", f"p:{who}:today"), ("7 дней", f"p:{who}:7"), (f"Месяц · {report.month_label()}",
                                                                        f"p:{who}:month")]]
-    if who != "all":
-        rows.append([("✏️ Изменить имя", f"ren:{who}"), ("🗑 Убрать из списка", f"del:{who}")])
     return kb(rows + [[("⬅️ Покупатели", "b"), ("🏠 Меню", "menu")]])
+
+
+def edit_kb():
+    """Редактировать: список имён → изменить имя или удалить."""
+    bs = store.buyers(db)
+    rows = [[(f"✏️ {short(name, 18)}", f"e:{bid}") for bid, name in bs[i:i + 2]] for i in range(0, len(bs), 2)]
+    return kb(rows + [[("🏠 Меню", "menu")]])
 
 
 def views_kb(who, kind):
@@ -245,16 +250,24 @@ async def button(cb: CallbackQuery):
             await msg.answer("Пришлите ID покупателя и имя одной строкой, например:\n47327265 Анна 1\n\n"
                              "Можно сразу несколько — каждого с новой строки. Можно вставить номер заказа целиком: "
                              "47327265-0623-1 Анна 1 — ID возьму из начала.")
+        elif d == "e":
+            if not store.buyers(db):
+                return await msg.answer("Список пуст.", reply_markup=main_menu(uid))
+            await msg.answer("Кого редактируем?", reply_markup=edit_kb())
+        elif d.startswith("e:"):
+            bid = d[2:]
+            await msg.answer(f"{title_of(bid)} · ID {bid}", reply_markup=kb(
+                [[("✏️ Изменить имя", f"ren:{bid}"), ("🗑 Удалить", f"del:{bid}")], [("⬅️ Назад", "e")]]))
         elif d.startswith("ren:"):
             waiting[uid] = ("ren", int(d[4:]))
             await msg.answer(f"Новое имя для ID {d[4:]}:")
         elif d.startswith("del:"):
             bid = d[4:]
-            await msg.answer(f"Убрать {title_of(bid)} (ID {bid}) из списка? История заказов останется.",
-                             reply_markup=kb([[("🗑 Да, убрать", f"delok:{bid}"), ("Отмена", f"b:{bid}")]]))
+            await msg.answer(f"Удалить {title_of(bid)} (ID {bid}) из списка? Заказы в базе останутся — если добавить снова, история вернётся.",
+                             reply_markup=kb([[("🗑 Да, удалить", f"delok:{bid}"), ("Отмена", f"e:{bid}")]]))
         elif d.startswith("delok:"):
             store.del_buyer(db, int(d[6:]))
-            await msg.answer("Убрала из списка.", reply_markup=buyers_kb() if store.buyers(db) else main_menu(uid))
+            await msg.answer("Удалила из списка.", reply_markup=edit_kb() if store.buyers(db) else main_menu(uid))
         elif d.startswith("u") and is_admin(uid):
             await users_button(msg, d)
     except Exception:
@@ -315,7 +328,7 @@ async def text(msg: Message):
         return await msg.answer(f"Добавила: {name} (ID {bid}). Выберите период:", reply_markup=periods_kb(str(bid)))
     if mode and mode[0] == "ren":
         store.add_buyer(db, mode[1], msg.text.strip())
-        return await msg.answer("Имя изменила.", reply_markup=periods_kb(str(mode[1])))
+        return await msg.answer("Имя изменила.", reply_markup=edit_kb())
     if mode and mode[0] == "user" and is_admin(uid) and msg.text.strip().isdigit():
         i = int(msg.text.strip())
         db.execute("insert or replace into users values (?, ?, ?)", (i, str(i), datetime.now(MSK).strftime("%d.%m.%Y")))
