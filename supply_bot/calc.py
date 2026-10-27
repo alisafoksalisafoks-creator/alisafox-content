@@ -371,6 +371,15 @@ def build(snap, overrides=None):
             sales14=round(s14c.get((offer, cl), 0)), sales30=s30c.get((offer, cl), 0), speed=speed,
             available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"])
 
+    # запаса в кластере и так надолго — не везём, товар нужнее там, где он кончается (решение владельца 27.10.2026)
+    enough = []
+    for ln in lines.values():
+        if ln.need > 0 and ln.days is not None and ln.days >= config.ENOUGH_DAYS:
+            enough.append({"offer": ln.offer, "warehouse": ln.warehouse, "need": ln.need, "speed": ln.speed,
+                           "box": None, "priority": ln.priority,
+                           "why": f"запаса на Ozon на {ln.days:.0f} дн (≥ {config.ENOUGH_DAYS}) — не везём"})
+            ln.need = 0
+
     for (offer, _cl), ln in lines.items():
         if offer in demand:
             ln.demand = demand[offer]["kind"]
@@ -503,7 +512,7 @@ def build(snap, overrides=None):
                    "why": f"меньше {config.PARTIAL_MIN} шт — неполным коробом не везём" if 0 < ln.need < config.PARTIAL_MIN
                    else "не хватило нашего склада" if any(x["root"] == ms_by[eligible[norm(ln.offer)]["key"]]["article"]
                                                              for x in plan.purchase) else "меньше полного короба"}
-                  for ln in lines.values() if ln.need > 0 and ln.qty == 0 and not ln.manual]
+                  for ln in lines.values() if ln.need > 0 and ln.qty == 0 and not ln.manual] + enough
     plan.lines = sorted((ln for ln in lines.values() if ln.qty > 0 or ln.manual),
                         key=lambda x: (_prio_rank(x.priority) * -1, x.warehouse, -x.qty))
 
