@@ -186,7 +186,9 @@ def dashboard(p, d):
              f"💰 Цена: <b>{rub(price)}</b>",
              f"   с вашими акциями: {rub(d.get('seller_price'))}"
              + (f", на сайте с картой: {rub(d['site_price'])}" if d.get('site_price') else "")]
-    lines += boost_hint(price, d.get("elastic"))
+    lines += ([f"🎯 Бустинг: Ozon не отдал акции ({html.escape(d['actions_failed'])}). Откройте артикул ещё раз "
+               f"через минуту или /check {html.escape(p['offer_id'])}"] if d.get("actions_failed")
+              else boost_hint(price, d.get("elastic")))
     if d.get("actions_errors"):
         lines.append(f"   ⚠️ Ozon не отдал данные {d['actions_errors']} акций — подробно: /check {html.escape(p['offer_id'])}")
     lines.append("")

@@ -157,6 +157,8 @@ async def collect(p):
         acq = (pr.get("acquiring") or 0) / pr["price"] * 100
         d["commission"] = pr["sale_percent"] + acq
     acts = res["actions"] if isinstance(res["actions"], dict) else {"elastic": {}, "site": {}}
+    if not isinstance(res["actions"], dict):
+        d["actions_failed"] = str(res["actions"])[:120] or type(res["actions"]).__name__
     d["site_price"] = acts["site"].get(pid)
     d["stairway"] = res["stairway"].get(sku) if isinstance(res["stairway"], dict) else None
     d["stock"] = res["stock"].get(pid) if isinstance(res["stock"], dict) else None
@@ -734,7 +736,7 @@ async def on_check(msg: Message):
     cache.pop("actions", None)
     try:
         acts = await cached("actions", 1800, ozon.actions)
-    except OzonError as e:
+    except Exception as e:  # noqa: BLE001
         return await wait.edit_text(f"Ozon не отдал акции: {html.escape(str(e))}")
     await wait.edit_text(calc.check_text(p, acts), reply_markup=nav_kb())
 

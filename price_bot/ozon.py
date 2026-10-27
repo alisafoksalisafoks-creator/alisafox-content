@@ -57,15 +57,21 @@ class Ozon:
         """Запрос с повтором при 429 и 5xx (до 4 попыток)."""
         s = await self.session()
         for attempt in range(4):
-            async with s.request(method, BASE + path, json=body) as r:
-                if r.status == 429 or r.status >= 500:
-                    log.warning("%s → %s, повтор", path, r.status)
-                    await asyncio.sleep(2 ** attempt * 2)
-                    continue
-                data = await r.json(content_type=None)
-                if r.status != 200:
-                    raise OzonError(f"{path}: {r.status} {(data or {}).get('message', '')}".strip())
-                return data
+            try:
+                async with s.request(method, BASE + path, json=body) as r:
+                    if r.status == 429 or r.status >= 500:
+                        log.warning("%s → %s, повтор", path, r.status)
+                        await asyncio.sleep(2 ** attempt * 2)
+                        continue
+                    data = await r.json(content_type=None)
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+                # обрыв связи, таймаут или не-JSON — тоже повторяем, а не роняем весь сбор данных
+                log.warning("%s: %s, повтор", path, repr(e))
+                await asyncio.sleep(2 ** attempt * 2)
+                continue
+            if r.status != 200:
+                raise OzonError(f"{path}: {r.status} {(data or {}).get('message', '')}".strip())
+            return data
         raise OzonError(f"{path}: Ozon не отвечает, попробуйте позже")
 
     # --- каталог ---
@@ -176,33 +182,39 @@ class Ozon:
         """
         actions = (await self.call("/v1/actions", method="GET")).get("result", [])
         elastic, site, seen, errors = {}, {}, {}, []
-        for a in actions:
+        sem = asyncio.Semaphore(4)  # акций много: читаем по 4 параллельно, не упираясь в лимиты Ozon
+
+        async def load(a, kind):
+            async with sem:
+                try:
+                    return await self._action_products(kind, int(a["id"]))
+                except Exception as e:  # noqa: BLE001 — одна акция не должна обнулять остальные
+                    title = a.get("title") or f"акция {a.get('id')}"
+                    errors.append(f"{title}: {e!r}" if not str(e) else f"{title}: {e}")
+                    log.warning("акция %s, %s: %r", title, kind, e)
+                    return []
+        jobs = [(a, kind, inside) for a in actions for kind, inside in (("products", True), ("candidates", False))]
+        loaded = await asyncio.gather(*(load(a, kind) for a, kind, _ in jobs))
+        for (a, kind, inside), products in zip(jobs, loaded):
             title = a.get("title") or f"акция {a.get('id')}"
             elastic_title = "эластичн" in title.lower() or "ELASTIC" in (a.get("action_type") or "").upper()
-            for kind, inside in (("products", True), ("candidates", False)):
-                try:
-                    products = await self._action_products(kind, int(a["id"]))
-                except OzonError as e:
-                    errors.append(f"{title}: {e}")
-                    log.warning("акция %s, %s: %s", title, kind, e)
+            for p in products:
+                sp = _card_price(p.get("website_prices"))
+                if sp and p["id"] not in site:
+                    site[p["id"]] = sp
+                lo, hi = _money(p.get("price_min_elastic")), _money(p.get("price_max_elastic"))
+                seen.setdefault(p["id"], []).append({"action": title, "in_action": inside, "min_el": lo,
+                                                     "max_el": hi, "site": sp})
+                if not lo and not hi:
                     continue
-                for p in products:
-                    sp = _card_price(p.get("website_prices"))
-                    if sp and p["id"] not in site:
-                        site[p["id"]] = sp
-                    lo, hi = _money(p.get("price_min_elastic")), _money(p.get("price_max_elastic"))
-                    seen.setdefault(p["id"], []).append({"action": title, "in_action": inside, "min_el": lo,
-                                                         "max_el": hi, "site": sp})
-                    if not lo and not hi:
-                        continue
-                    rank = (elastic_title, inside)
-                    prev = elastic.get(p["id"])
-                    if prev and prev["rank"] >= rank:
-                        continue
-                    elastic[p["id"]] = {"action": title, "min_el": lo, "max_el": hi, "in_action": inside,
-                                        "boost": p.get("current_boost"), "min_boost": p.get("min_boost"),
-                                        "max_boost": p.get("max_boost"),
-                                        "action_price": _money(p.get("action_price")), "rank": rank}
+                rank = (elastic_title, inside)
+                prev = elastic.get(p["id"])
+                if prev and prev["rank"] >= rank:
+                    continue
+                elastic[p["id"]] = {"action": title, "min_el": lo, "max_el": hi, "in_action": inside,
+                                    "boost": p.get("current_boost"), "min_boost": p.get("min_boost"),
+                                    "max_boost": p.get("max_boost"),
+                                    "action_price": _money(p.get("action_price")), "rank": rank}
         log.info("акции: %s, вилка бустинга у %s товаров, цена на сайте у %s, ошибок %s",
                  len(actions), len(elastic), len(site), len(errors))
         return {"elastic": elastic, "site": site, "seen": seen, "errors": errors}

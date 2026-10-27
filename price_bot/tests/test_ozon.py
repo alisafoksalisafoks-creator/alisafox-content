@@ -101,6 +101,20 @@ class TestOzon(unittest.TestCase):
         self.assertEqual(len(r["errors"]), 1)
         self.assertEqual(len(r["seen"][10]), 1)
 
+    def test_timeout_in_one_action(self):
+        def v2(b):
+            if b["action_id"] == 1:
+                raise asyncio.TimeoutError()
+            return {"products": [{"id": 10, "price_min_elastic": 993, "price_max_elastic": 838, "current_boost": 55}]}
+        o = Fake({"/v1/actions": {"result": [{"id": 1, "title": "Распродажа"},
+                                             {"id": 2, "title": "Эластичный бустинг. Без ограничения срока действия"}]},
+                  "/v2/actions/products": v2, "/v2/actions/candidates": {"products": []},
+                  "/v1/actions/products": lambda b: (_ for _ in ()).throw(asyncio.TimeoutError())})
+        r = run(o.actions())
+        e = r["elastic"][10]
+        self.assertEqual((e["min_el"], e["max_el"], e["in_action"], e["boost"]), (993.0, 838.0, True, 55))
+        self.assertEqual(len(r["errors"]), 1)
+
     def test_v1_fallback_unwraps_result(self):
         from price_bot.ozon import OzonError
 
