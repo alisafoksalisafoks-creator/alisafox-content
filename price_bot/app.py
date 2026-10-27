@@ -67,6 +67,14 @@ def kb(rows):
                                                  for r in rows])
 
 
+HOME = ("🏠 Меню", "home")
+
+
+def nav_kb(back=None):
+    """Кнопки «⬅️ Назад» (если есть куда) и «🏠 Меню» — на каждом экране, чтобы не застрять."""
+    return kb([([("⬅️ Назад", back)] if back else []) + [HOME]])
+
+
 def who(user):
     return user.full_name + (f" (@{user.username})" if user.username else "")
 
@@ -245,14 +253,14 @@ async def show_categories(msg: Message, sec, page=0, edit=False):
     nav = ([("◀️", f"cl:{sec}:{page - 1}")] if page else []) + \
           ([("▶️", f"cl:{sec}:{page + 1}")] if (page + 1) * PAGE < len(cats) else [])
     text = f"{SECTIONS[sec]} · выберите категорию ({len(cats)}, товары от {store.catalog()['updated']})"
-    markup = kb(rows + ([nav] if nav else []))
+    markup = kb(rows + ([nav] if nav else []) + [[HOME]])
     await (msg.edit_text(text, reply_markup=markup) if edit else msg.answer(text, reply_markup=markup))
 
 
-async def show_category(msg: Message, sec, ci, page=0):
+async def show_category(msg: Message, sec, ci, page=0, edit=True):
     cat, goods = in_category(await items(), ci)
     if cat is None:
-        return await msg.edit_text("Список товаров обновился. Откройте раздел заново.")
+        return await msg.edit_text("Список товаров обновился. Откройте раздел заново.", reply_markup=nav_kb())
     chunk = goods[page * PAGE:(page + 1) * PAGE]
     rows = [[(f"{g['offer_id']} · {g['fbo']} шт · {g['name'][:24]}", f"pr:{sec}:{g['product_id']}")] for g in chunk]
     nav = ([("◀️", f"ca:{sec}:{ci}:{page - 1}")] if page else []) + \
@@ -262,15 +270,16 @@ async def show_category(msg: Message, sec, ci, page=0):
     if sec == "q":
         rows.append([("📦 Вся категория: поставить / изменить", f"qcs:{ci}")])
         rows.append([("🗑 Вся категория: удалить скидку", f"qcd:{ci}")])
-    rows.append([("⬅️ Категории", f"cl:{sec}:0")])
-    await msg.edit_text(f"{SECTIONS[sec]} · {html.escape(cat)}: {len(goods)} шт. Выберите артикул.", reply_markup=kb(rows))
+    rows.append([("⬅️ Категории", f"cl:{sec}:0"), HOME])
+    text = f"{SECTIONS[sec]} · {html.escape(cat)}: {len(goods)} шт. Выберите артикул."
+    await (msg.edit_text(text, reply_markup=kb(rows)) if edit else msg.answer(text, reply_markup=kb(rows)))
 
 
 async def show_product(msg: Message, sec, pid, edit=True):
     goods = await items()
     p = product(goods, pid)
     if not p:
-        return await msg.answer("Товар не найден, нажмите «Обновить товары».")
+        return await msg.answer("Товар не найден, нажмите «Обновить товары».", reply_markup=nav_kb())
     ci = categories(goods).index(p["cat"])
     back = ("⬅️ Назад", f"ca:{sec}:{ci}:0")
     if sec == "p":
@@ -278,11 +287,11 @@ async def show_product(msg: Message, sec, pid, edit=True):
         d = await collect(p)
         await wait.delete()
         return await msg.answer(calc.dashboard(p, d), reply_markup=kb(
-            [[("✏️ Изменить цену", f"pe:{pid}"), ("✅ Оставить", f"ca:p:{ci}:0")], [back]]))
+            [[("✏️ Изменить цену", f"pe:{pid}"), ("✅ Оставить", f"ca:p:{ci}:0")], [back, HOME]]))
     try:
         st = (await ozon.stairways([p["sku"]])).get(p["sku"])
     except OzonError as e:
-        return await msg.answer(f"Ozon не отдал скидку: {e}")
+        return await msg.answer(f"Ozon не отдал скидку: {e}", reply_markup=nav_kb(back[1]))
     has = bool(st and st["enabled"] and st["steps"])
     text = (f"📦 <b>{html.escape(p['offer_id'])}</b> · {html.escape(p['name'][:80])}\n"
             f"Скидка от количества: {calc.fmt_steps(st['steps']) if has else 'нет'}"
@@ -290,7 +299,7 @@ async def show_product(msg: Message, sec, pid, edit=True):
     rows = [[("✏️ Изменить" if has else "➕ Поставить скидку", f"qs:{pid}")]]
     if has:
         rows[0].append(("🗑 Удалить", f"qd:{pid}"))
-    rows.append([back])
+    rows.append([back, HOME])
     await (msg.edit_text(text, reply_markup=kb(rows)) if edit else msg.answer(text, reply_markup=kb(rows)))
 
 
@@ -301,16 +310,16 @@ STEPS_HELP = ("Пришлите уровни одним сообщением: к
               "До 4 уровней, скидка только в %.")
 
 
-async def ask_steps(cb: CallbackQuery, targets, title):
-    waiting[cb.from_user.id] = {"kind": "steps", "targets": targets, "title": title}
-    await cb.message.answer(f"Скидка от количества для: {title}\n\n{STEPS_HELP}")
+async def ask_steps(cb: CallbackQuery, targets, title, back):
+    waiting[cb.from_user.id] = {"kind": "steps", "targets": targets, "title": title, "back": back}
+    await cb.message.answer(f"Скидка от количества для: {title}\n\n{STEPS_HELP}", reply_markup=cancel_kb(back))
 
 
 async def got_steps(msg: Message, w):
     try:
         steps = calc.parse_steps(msg.text or "")
     except ValueError as e:
-        return await msg.answer(f"{e}\nПришлите ещё раз или /menu, чтобы отменить.")
+        return await msg.answer(f"{e}\nПришлите ещё раз или нажмите «Отмена».", reply_markup=cancel_kb(w["back"]))
     waiting.pop(msg.from_user.id, None)
     goods = await items()
     targets = [product(goods, pid) for pid in w["targets"]]
@@ -323,41 +332,42 @@ async def got_steps(msg: Message, w):
                      f"{calc.fmt_steps(steps)}")
     if len(targets) > 15:
         lines.append(f"…и ещё {len(targets) - 15}")
-    pending[msg.from_user.id] = {"kind": "steps", "items": [(t["sku"], True, steps) for t in targets],
+    pending[msg.from_user.id] = {"kind": "steps", "back": w["back"],
+                                 "items": [(t["sku"], True, steps) for t in targets],
                                  "names": {t["sku"]: t["offer_id"] for t in targets},
                                  "summary": f"скидка от количества {w['title']}: {calc.fmt_steps(steps)}"}
-    await msg.answer("\n".join(lines + ["", "Точно применяем?"]), reply_markup=confirm_kb())
+    await msg.answer("\n".join(lines + ["", "Точно применяем?"]), reply_markup=confirm_kb(w["back"]))
 
 
-async def ask_delete(cb: CallbackQuery, pids, title):
+async def ask_delete(cb: CallbackQuery, pids, title, back):
     goods = await items()
     targets = [t for t in (product(goods, pid) for pid in pids) if t]
     current = await ozon.stairways([t["sku"] for t in targets])
     on = [t for t in targets if current.get(t["sku"], {}).get("enabled") and current[t["sku"]]["steps"]]
     if not on:
-        return await cb.message.answer("Скидки от количества здесь нет — удалять нечего.")
+        return await cb.message.answer("Скидки от количества здесь нет — удалять нечего.", reply_markup=nav_kb(back))
     lines = [f"Удаляем скидку от количества: <b>{title}</b>", ""] + \
             [f"{t['offer_id']}: {calc.fmt_steps(current[t['sku']]['steps'])} → нет" for t in on[:15]]
     if len(on) > 15:
         lines.append(f"…и ещё {len(on) - 15}")
-    pending[cb.from_user.id] = {"kind": "steps",
+    pending[cb.from_user.id] = {"kind": "steps", "back": back,
                                 "items": [(t["sku"], False, current[t["sku"]]["steps"]) for t in on],
                                 "names": {t["sku"]: t["offer_id"] for t in on},
                                 "summary": f"удалена скидка от количества {title}"}
-    await cb.message.answer("\n".join(lines + ["", "Точно удаляем?"]), reply_markup=confirm_kb())
+    await cb.message.answer("\n".join(lines + ["", "Точно удаляем?"]), reply_markup=confirm_kb(back))
 
 
 async def apply_steps(cb: CallbackQuery, job):
     try:
         r = await ozon.set_stairways(job["items"])
     except OzonError as e:
-        return await cb.message.answer(f"❌ Ozon не принял: {e}")
+        return await cb.message.answer(f"❌ Ozon не принял: {e}", reply_markup=nav_kb(job["back"]))
     store.log_change(f"{dt.datetime.now(MSK):%Y-%m-%d %H:%M} {who(cb.from_user)}: {job['summary']}")
     errs = {s: m for s, m in r["errors"].items() if m}
     text = f"📤 Отправила в Ozon: {len(job['items'])} шт. Ozon применяет не сразу — проверю через минуту."
     if errs:
         text += "\n\n❌ Ошибки:\n" + "\n".join(f"{job['names'].get(s, s)}: {'; '.join(m)}" for s, m in errs.items())
-    await cb.message.answer(text)
+    await cb.message.answer(text, reply_markup=nav_kb(job["back"]))
     asyncio.create_task(check_steps(cb.bot, cb.message.chat.id, job))
 
 
@@ -375,7 +385,7 @@ async def check_steps(bot: Bot, chat_id, job):
         lines.append(f"⏳ Ещё в процессе: {len(by['IN_PROCESS'])} — проверьте позже в карточке")
     if by["ERROR"]:
         lines.append("❌ Ошибка у: " + ", ".join(by["ERROR"][:20]) + " — попробуйте ещё раз")
-    await bot.send_message(chat_id, "Скидка от количества:\n" + "\n".join(lines))
+    await bot.send_message(chat_id, "Скидка от количества:\n" + "\n".join(lines), reply_markup=nav_kb(job["back"]))
 
 
 # --- цена ---
@@ -384,15 +394,15 @@ async def got_price(msg: Message, w):
     try:
         new = calc.parse_price(msg.text)
     except ValueError as e:
-        return await msg.answer(f"{e}\nПришлите ещё раз или /menu, чтобы отменить.")
+        return await msg.answer(f"{e}\nПришлите ещё раз или нажмите «Отмена».", reply_markup=cancel_kb(w["back"]))
     waiting.pop(msg.from_user.id, None)
     p = product(await items(), w["pid"])
     d = await collect(p)
     if d.get("price") == new:
-        return await msg.answer("Цена такая же, как сейчас. Ничего не меняю.")
-    pending[msg.from_user.id] = {"kind": "price", "pid": p["product_id"], "offer_id": p["offer_id"],
+        return await msg.answer("Цена такая же, как сейчас. Ничего не меняю.", reply_markup=nav_kb(w["back"]))
+    pending[msg.from_user.id] = {"kind": "price", "back": w["back"], "pid": p["product_id"], "offer_id": p["offer_id"],
                                  "old": d.get("price"), "new": new}
-    await msg.answer(calc.confirm_price(p, d, new), reply_markup=confirm_kb())
+    await msg.answer(calc.confirm_price(p, d, new), reply_markup=confirm_kb(w["back"]))
 
 
 async def apply_price(cb: CallbackQuery, job):
@@ -401,17 +411,23 @@ async def apply_price(cb: CallbackQuery, job):
     except OzonError as e:
         errors = [str(e)]
     if errors:
-        return await cb.message.answer(f"❌ Ozon не принял цену {job['offer_id']}: " + "; ".join(errors))
+        return await cb.message.answer(f"❌ Ozon не принял цену {job['offer_id']}: " + "; ".join(errors),
+                                       reply_markup=nav_kb(job["back"]))
     store.log_change(f"{dt.datetime.now(MSK):%Y-%m-%d %H:%M} {who(cb.from_user)}: цена {job['offer_id']} "
                      f"{job['old']} → {job['new']}")
     cache.pop("elastic", None)  # участие в бустинге зависит от цены
     await cb.message.answer(f"✅ Цена {job['offer_id']}: {calc.rub(job['old'])} → {calc.rub(job['new'])}. "
                             "На витрине Ozon обновится в течение нескольких минут.",
-                            reply_markup=kb([[("🔁 Открыть артикул", f"pr:p:{job['pid']}")]]))
+                            reply_markup=kb([[("🔁 Открыть артикул", f"pr:p:{job['pid']}"), HOME]]))
 
 
-def confirm_kb():
-    return kb([[("✅ Да, применить", "ok"), ("❌ Отмена", "no")]])
+def confirm_kb(back):
+    return kb([[("✅ Да, применить", "ok"), ("❌ Отмена", f"no|{back}")], [HOME]])
+
+
+def cancel_kb(back):
+    """Под вопросом «пришлите цену / уровни»: отменить ввод и вернуться назад."""
+    return kb([[("❌ Отмена", f"no|{back}"), HOME]])
 
 
 # --- снимки на каждый день: соинвест и место в выдаче ---
@@ -501,38 +517,63 @@ async def on_button(cb: CallbackQuery):
     if not allowed(uid):
         return await cb.answer("Нет доступа")
     await cb.answer()
-    a = cb.data.split(":")
+    await route(cb, cb.data)
+
+
+async def show_home(msg: Message, uid):
+    await msg.answer("Главное меню. Выберите раздел.", reply_markup=kb([[("💰 Цены", "cl:p:0n"),
+                                                                       ("📦 Скидка от количества", "cl:q:0n")]]))
+    await msg.answer("Кнопки разделов есть и внизу экрана.", reply_markup=menu(uid))
+
+
+async def route(cb: CallbackQuery, data):
+    uid = cb.from_user.id
+    if data == "home" or data.startswith("no|"):
+        waiting.pop(uid, None)
+        had = pending.pop(uid, None)
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass  # сообщение уже без кнопок или слишком старое
+        if data == "home":
+            return await show_home(cb.message, uid)
+        await cb.message.answer("Отменено, в Ozon ничего не меняла." if had else "Отменено.")
+        return await route(cb, data[3:])
+    fresh = data.endswith("n")  # «n» в конце — показать новым сообщением, а не править старое
+    a = data.rstrip("n").split(":")
     try:
         if a[0] == "cl":
-            return await show_categories(cb.message, a[1], int(a[2]), edit=True)
+            return await show_categories(cb.message, a[1], int(a[2]), edit=not fresh)
         if a[0] == "ca":
-            return await show_category(cb.message, a[1], int(a[2]), int(a[3]))
+            return await show_category(cb.message, a[1], int(a[2]), int(a[3]), edit=not fresh)
         if a[0] == "pr":
-            return await show_product(cb.message, a[1], int(a[2]), edit=a[1] == "q")
+            return await show_product(cb.message, a[1], int(a[2]), edit=a[1] == "q" and not fresh)
         if a[0] == "pe":
             p = product(await items(), int(a[1]))
-            waiting[uid] = {"kind": "price", "pid": p["product_id"]}
-            return await cb.message.answer(f"Новая цена для {p['offer_id']}? Пришлите число, например 1290.")
+            back = f"pr:p:{p['product_id']}"
+            waiting[uid] = {"kind": "price", "pid": p["product_id"], "back": back}
+            return await cb.message.answer(f"Новая цена для {p['offer_id']}? Пришлите число, например 1290.",
+                                           reply_markup=cancel_kb(back))
         if a[0] == "qs":
             p = product(await items(), int(a[1]))
-            return await ask_steps(cb, [p["product_id"]], p["offer_id"])
+            return await ask_steps(cb, [p["product_id"]], p["offer_id"], f"pr:q:{p['product_id']}n")
         if a[0] == "qd":
             p = product(await items(), int(a[1]))
-            return await ask_delete(cb, [p["product_id"]], p["offer_id"])
+            return await ask_delete(cb, [p["product_id"]], p["offer_id"], f"pr:q:{p['product_id']}n")
         if a[0] in ("qcs", "qcd"):
             cat, goods = in_category(await items(), int(a[1]))
             pids = [g["product_id"] for g in goods]
             title = f"вся категория «{html.escape(cat)}» ({len(pids)} шт.)"
-            return await (ask_steps(cb, pids, title) if a[0] == "qcs" else ask_delete(cb, pids, title))
-        if a[0] in ("ok", "no"):
+            back = f"ca:q:{a[1]}:0n"
+            return await (ask_steps(cb, pids, title, back) if a[0] == "qcs" else ask_delete(cb, pids, title, back))
+        if a[0] == "ok":
             job = pending.pop(uid, None)
             await cb.message.edit_reply_markup(reply_markup=None)
-            if a[0] == "no" or not job:
-                return await cb.message.answer("Отменено, в Ozon ничего не меняла." if a[0] == "no"
-                                               else "Это подтверждение уже неактуально.")
+            if not job:
+                return await cb.message.answer("Это подтверждение уже неактуально.", reply_markup=nav_kb())
             return await (apply_price(cb, job) if job["kind"] == "price" else apply_steps(cb, job))
     except OzonError as e:
-        await cb.message.answer(f"Ozon не ответил: {e}. Попробуйте ещё раз.")
+        await cb.message.answer(f"Ozon не ответил: {e}. Попробуйте ещё раз.", reply_markup=nav_kb())
 
 
 async def main():
