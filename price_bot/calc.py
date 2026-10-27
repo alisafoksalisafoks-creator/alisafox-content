@@ -238,7 +238,8 @@ def dashboard(p, d):
     else:
         lines.append("📈 ЧП и ДРР: нет данных из ТС" + (f" ({d['ts_error']})" if d.get("ts_error") else ""))
     si = d.get("soinvest")
-    lines.append(f"🤝 Соинвест (на {d.get('soinvest_at') or 'сегодня'}): ≈{pct(si)} · "
+    at = d.get("soinvest_at")
+    lines.append(f"🤝 Соинвест ({'сейчас' if at == 'сейчас' else 'на ' + (at or 'сегодня')}): ≈{pct(si)} · "
                  f"{trend(si, d.get('soinvest_y'), unit='%')}" if si is not None
                  else "🤝 Соинвест: нет цены с картой (товара нет в акциях Ozon) или ещё не посчитан — "
                       "бот считает в 9:00, 15:00 и 23:00 МСК")

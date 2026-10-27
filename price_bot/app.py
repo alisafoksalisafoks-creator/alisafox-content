@@ -160,6 +160,8 @@ async def collect(p):
     if not isinstance(res["actions"], dict):
         d["actions_failed"] = str(res["actions"])[:120] or type(res["actions"]).__name__
     d["site_price"] = acts["site"].get(pid)
+    d["elastic"] = acts["elastic"].get(pid)
+    d["actions_errors"] = len(acts.get("errors") or [])
     d["stairway"] = res["stairway"].get(sku) if isinstance(res["stairway"], dict) else None
     d["stock"] = res["stock"].get(pid) if isinstance(res["stock"], dict) else None
     if isinstance(res["ts"], dict):
@@ -171,7 +173,10 @@ async def collect(p):
     t, y = today(), today() - dt.timedelta(days=1)
     snap_y = store.snapshot(y.isoformat()).get(sku, {})
     snap_t = store.snapshot(t.isoformat()).get(sku, {})
-    if "заказов" not in (snap_t.get("site_src") or ""):  # старые снимки по средней цене заказов — неверные, ≈0%
+    live = calc.soinvest(d.get("seller_price"), d.get("site_price"))
+    if live is not None:  # обе цены уже на экране — считаем соинвест сразу
+        d["soinvest"], d["soinvest_at"] = live, "сейчас"
+    elif "заказов" not in (snap_t.get("site_src") or ""):  # старые снимки по средней цене заказов — неверные
         d["soinvest"], d["soinvest_at"] = snap_t.get("soinvest"), snap_t.get("soinvest_at")
     if "заказов" not in (snap_y.get("site_src") or ""):
         d["soinvest_y"] = snap_y.get("soinvest")
