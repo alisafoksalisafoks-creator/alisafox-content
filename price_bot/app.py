@@ -141,8 +141,7 @@ async def collect(p):
     d, sku, pid = {}, p["sku"], p["product_id"]
     jobs = {
         "price": ozon.prices([pid]),
-        "customer": ozon.customer_prices([sku]),
-        "elastic": cached("elastic", 1800, ozon.elastic),
+        "actions": cached("actions", 1800, ozon.actions),
         "stairway": ozon.stairways([sku]),
         "stock": ozon.stocks([pid]),
         "ts": ts.unit_metrics([sku], today()),
@@ -156,10 +155,10 @@ async def collect(p):
     if pr.get("price") and pr.get("sale_percent") is not None:
         acq = (pr.get("acquiring") or 0) / pr["price"] * 100
         d["commission"] = pr["sale_percent"] + acq
-    cu = res["customer"].get(sku, {}) if isinstance(res["customer"], dict) else {}
-    d["customer_price"], d["ozon_percent"] = cu.get("customer_price"), cu.get("ozon_percent")
-    d["soinvest"] = calc.soinvest(d.get("seller_price"), d.get("customer_price"))
-    d["elastic"] = res["elastic"].get(pid) if isinstance(res["elastic"], dict) else None
+    acts = res["actions"] if isinstance(res["actions"], dict) else {"elastic": {}, "site": {}}
+    d["site_price"] = acts["site"].get(pid)
+    d["soinvest"] = calc.soinvest(d.get("seller_price"), d.get("site_price"))
+    d["elastic"] = acts["elastic"].get(pid)
     d["stairway"] = res["stairway"].get(sku) if isinstance(res["stairway"], dict) else None
     d["stock"] = res["stock"].get(pid) if isinstance(res["stock"], dict) else None
     if isinstance(res["ts"], dict):
@@ -558,7 +557,7 @@ async def apply_price(cb: CallbackQuery, job):
     store.add_history([{"ts": f"{now:%d.%m %H:%M}", "at": now.isoformat(timespec="minutes"),
                         "who": cb.from_user.full_name, "kind": "price",
                         "offer": job["offer_id"], "old": job["old"], "new": job["new"]}])
-    cache.pop("elastic", None)  # участие в бустинге зависит от цены
+    cache.pop("actions", None)  # участие в бустинге зависит от цены
     await cb.message.answer(f"✅ Цена {job['offer_id']}: {calc.rub(job['old'])} → {calc.rub(job['new'])}. "
                             "На витрине Ozon обновится в течение нескольких минут.",
                             reply_markup=kb([[("🔁 Открыть артикул", f"pr:p:{job['pid']}"), HOME]]))
@@ -582,11 +581,11 @@ async def daily_snapshots():
             goods = await items()
             day = today()
             prices = await ozon.prices([g["product_id"] for g in goods])
-            cust = await ozon.customer_prices([g["sku"] for g in goods])
+            site = (await cached("actions", 1800, ozon.actions))["site"]
             values = {}
             for g in goods:
                 si = calc.soinvest((prices.get(g["product_id"]) or {}).get("seller_price"),
-                                   (cust.get(g["sku"]) or {}).get("customer_price"))
+                                   site.get(g["product_id"]))
                 values[g["sku"]] = {"soinvest": si}
             for sku, pos in (await positions(day)).items():
                 values.setdefault(sku, {})["position"] = pos
@@ -650,7 +649,7 @@ async def on_refresh(msg: Message):
         goods = await refresh_catalog()
     except OzonError as e:
         return await wait.edit_text(f"Не получилось: {e}")
-    cache.pop("elastic", None)
+    cache.pop("actions", None)
     await wait.edit_text(f"Готово: {len(goods)} товаров в продаже с остатком на складах Ozon, "
                          f"{len(categories(goods))} категорий.", reply_markup=nav_kb())
 

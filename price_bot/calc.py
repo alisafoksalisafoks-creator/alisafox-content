@@ -21,11 +21,11 @@ def pct(v, digits=1):
     return f"{v:.{digits}f}".rstrip("0").rstrip(".").replace(".", ",") + "%"
 
 
-def soinvest(seller_price, customer_price):
-    """Соинвест Ozon, % = (наша цена с учётом наших акций − цена покупателя) / наша цена × 100."""
-    if not seller_price or not customer_price:
+def soinvest(seller_price, site_price):
+    """Соинвест Ozon, % ≈ (наша цена с учётом наших акций − цена на сайте) / наша цена × 100."""
+    if not seller_price or not site_price:
         return None
-    return round((seller_price - customer_price) / seller_price * 100, 1)
+    return round((seller_price - site_price) / seller_price * 100, 1)
 
 
 def trend(today, yesterday, lower_is_better=False, unit="", ref="вчера"):
@@ -164,8 +164,8 @@ def dashboard(p, d):
     lines = [f"📦 <b>{html.escape(p['name'][:90])}</b>",
              f"Арт. {html.escape(p['offer_id'])} · SKU {p['sku']}", "",
              fmt_stock(d.get("stock")),
-             f"💰 Цена: <b>{rub(price)}</b>" + (f" (зачёркнутая {rub(d['old_price'])})" if d.get("old_price") else ""),
-             f"   с вашими акциями: {rub(d.get('seller_price'))}, у покупателя: {rub(d.get('customer_price'))}"]
+             f"💰 Цена: <b>{rub(price)}</b>",
+             f"   с вашими акциями: {rub(d.get('seller_price'))}, на сайте: {rub(d.get('site_price'))}"]
     if d.get("min_price"):
         lines.append(f"   мин. цена для автоакций: {rub(d['min_price'])}")
     lines += boost_hint(price, d.get("elastic"))
@@ -177,10 +177,8 @@ def dashboard(p, d):
     else:
         lines.append("📈 ЧП и ДРР: нет данных из ТС" + (f" ({d['ts_error']})" if d.get("ts_error") else ""))
     si = d.get("soinvest")
-    lines.append(f"🤝 Соинвест сегодня: {pct(si)} · {trend(si, d.get('soinvest_y'), unit='%')}" if si is not None
-                 else "🤝 Соинвест: нет цены покупателя (нужен Premium Pro)")
-    if si is not None and d.get("ozon_percent") is not None and abs(d["ozon_percent"] - si) >= 1:
-        lines.append(f"   по данным Ozon: {pct(d['ozon_percent'])}")
+    lines.append(f"🤝 Соинвест сегодня: ≈{pct(si)} · {trend(si, d.get('soinvest_y'), unit='%')}" if si is not None
+                 else "🤝 Соинвест: нет цены на сайте (товара нет ни в одной акции Ozon)")
     st = d.get("stairway")
     lines.append("📦 Скидка от количества: " + (fmt_steps(st["steps"]) if st and st["enabled"] else "нет"))
     pos = d.get("position")

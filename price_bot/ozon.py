@@ -141,21 +141,6 @@ class Ozon:
                     break
         return out
 
-    async def customer_prices(self, skus):
-        """{sku: {customer_price, ozon_percent}} — нужен Premium Pro. Без подписки вернёт пусто."""
-        out = {}
-        skus = [str(s) for s in skus]
-        for i in range(0, len(skus), 1000):
-            try:
-                r = await self.call("/v1/product/prices/details", {"skus": skus[i:i + 1000]})
-            except OzonError as e:
-                log.warning("цена покупателя недоступна: %s", e)
-                return out
-            for it in r.get("prices", []):
-                out[int(it["sku"])] = {"customer_price": _money(it.get("customer_price")),
-                                       "ozon_percent": it.get("discount_percent")}
-        return out
-
     async def set_price(self, offer_id, price):
         """Меняет цену. Возвращает список ошибок Ozon (пустой — успех)."""
         r = await self.call("/v1/product/import/prices", {"prices": [{"offer_id": offer_id, "price": str(price)}]})
@@ -164,38 +149,43 @@ class Ozon:
             return []
         return [e.get("message") or e.get("code") for e in res.get("errors", [])] or ["Ozon не принял цену"]
 
-    # --- акции «Эластичный бустинг» ---
+    # --- акции: «Эластичный бустинг» и цена на сайте ---
 
-    async def elastic(self):
-        """{product_id: {action, min_el, max_el, boost, min_boost, max_boost, in_action, action_price}}.
+    async def actions(self):
+        """{"elastic": {product_id: {...}}, "site": {product_id: цена на сайте}} по всем акциям Ozon.
 
         Цены AY/AZ из шаблона цен: price_min_elastic — цена для минимального бустинга (вход в акцию),
-        price_max_elastic — для максимального. Берём из всех акций, где эти поля заполнены.
+        price_max_elastic — для максимального; берём из акций «…бустинг». Цену на сайте (website_prices) Ozon
+        отдаёт по товарам любой акции — участникам и кандидатам; подписка для этого не нужна.
         """
         actions = (await self.call("/v1/actions", method="GET")).get("result", [])
-        out = {}
+        # сначала бустинг: из него и вилка, и цена на сайте
+        actions.sort(key=lambda a: "бустинг" not in (a.get("title") or "").lower())
+        elastic, site = {}, {}
         for a in actions:
-            if "бустинг" not in (a.get("title") or "").lower():
-                continue
+            boost = "бустинг" in (a.get("title") or "").lower()
             for path, inside in (("/v2/actions/products", True), ("/v2/actions/candidates", False)):
                 last = ""
                 while True:
                     r = await self.call(path, {"action_id": int(a["id"]), "last_id": last, "limit": 1000})
                     for p in r.get("products", []):
+                        sp = _money((p.get("website_prices") or {}).get("price"))
+                        if sp and p["id"] not in site:
+                            site[p["id"]] = sp
                         lo, hi = _money(p.get("price_min_elastic")), _money(p.get("price_max_elastic"))
-                        if not lo and not hi:
+                        if not boost or (not lo and not hi):
                             continue
-                        prev = out.get(p["id"])
+                        prev = elastic.get(p["id"])
                         if prev and prev["in_action"] and not inside:
                             continue  # уже нашли товар участником, кандидатство не важнее
-                        out[p["id"]] = {"action": a.get("title"), "min_el": lo, "max_el": hi, "in_action": inside,
-                                        "boost": p.get("current_boost"), "min_boost": p.get("min_boost"),
-                                        "max_boost": p.get("max_boost"),
-                                        "action_price": _money(p.get("action_price"))}
+                        elastic[p["id"]] = {"action": a.get("title"), "min_el": lo, "max_el": hi, "in_action": inside,
+                                            "boost": p.get("current_boost"), "min_boost": p.get("min_boost"),
+                                            "max_boost": p.get("max_boost"),
+                                            "action_price": _money(p.get("action_price"))}
                     last = r.get("last_id")
                     if not last or not r.get("products"):
                         break
-        return out
+        return {"elastic": elastic, "site": site}
 
     # --- скидка от количества ---
 

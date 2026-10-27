@@ -56,16 +56,17 @@ class TestOzon(unittest.TestCase):
         self.assertFalse(body["stairways"][1]["enabled"])
         self.assertEqual(r["errors"], {6: ["слишком большая скидка"]})
 
-    def test_elastic_prefers_participation(self):
+    def test_actions_elastic_and_site_price(self):
         prod = {"id": 10, "price_min_elastic": {"amount": "351"}, "price_max_elastic": {"amount": "221"},
-                "current_boost": 12}
+                "current_boost": 12, "website_prices": {"price": {"amount": "837"}}}
         o = Fake({"/v1/actions": {"result": [{"id": 1, "title": "Эластичный бустинг"}, {"id": 2, "title": "Распродажа"}]},
                   "/v2/actions/products": {"products": [prod], "last_id": ""},
                   "/v2/actions/candidates": {"products": [dict(prod, current_boost=0)], "last_id": ""}})
-        el = run(o.elastic())
+        r = run(o.actions())
+        el = r["elastic"]
+        self.assertEqual(r["site"], {10: 837.0})
         self.assertEqual((el[10]["min_el"], el[10]["max_el"], el[10]["in_action"], el[10]["boost"]),
                          (351.0, 221.0, True, 12))
-        self.assertNotIn(2, [b["action_id"] for _, b in o.sent if b and "action_id" in b])
 
     def test_set_price_errors(self):
         o = Fake({"/v1/product/import/prices": {"result": [{"updated": False, "errors": [{"message": "old_price"}]}]}})

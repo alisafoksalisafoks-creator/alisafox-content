@@ -118,7 +118,7 @@ class TestTrend(unittest.TestCase):
 
 class TestScreens(unittest.TestCase):
     def test_dashboard_full(self):
-        d = {"price": 365, "seller_price": 365, "customer_price": 320, "soinvest": 12.3, "soinvest_y": 15,
+        d = {"price": 365, "seller_price": 365, "site_price": 320, "soinvest": 12.3, "soinvest_y": 15,
              "elastic": TestBoost.EL, "ts": {"profit": 252.55, "drr": 9.71, "drr_rk": 8.16, "period": "17.10–26.10"},
              "stairway": {"enabled": True, "steps": [(2, 5)]}, "position": 7, "position_y": 9,
              "stock": {"fbo": 30, "fbs": 5}}
