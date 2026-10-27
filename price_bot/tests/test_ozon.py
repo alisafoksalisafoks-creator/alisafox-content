@@ -114,6 +114,16 @@ class TestOzon(unittest.TestCase):
         e = run(o.actions())["elastic"][10]
         self.assertEqual((e["min_el"], e["max_el"], e["in_action"]), (637.0, None, False))
 
+    def test_site_price_is_card_price(self):
+        from price_bot.ozon import _card_price
+        wp = {"price": {"amount": "1767"},
+              "prices_by_schema": {"FBS": {"black_price": {"amount": "1742"}, "green_price": {"amount": "1610"}},
+                                   "FBO": {"black_price": {"amount": "1767"}, "green_price": {"amount": "1590"}}}}
+        self.assertEqual(_card_price(wp), 1590.0)
+        self.assertEqual(_card_price({"prices_by_schema": {"FBO": {"black_price": {"amount": "1767"}}}}), 1767.0)
+        self.assertEqual(_card_price({"price": {"amount": "837"}}), 837.0)
+        self.assertIsNone(_card_price(None))
+
     def test_set_price_errors(self):
         o = Fake({"/v1/product/import/prices": {"result": [{"updated": False, "errors": [{"message": "old_price"}]}]}})
         self.assertEqual(run(o.set_price("OZ214", 1290)), ["old_price"])

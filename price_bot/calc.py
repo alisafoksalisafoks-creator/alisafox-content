@@ -22,7 +22,7 @@ def pct(v, digits=1):
 
 
 def soinvest(seller_price, site_price):
-    """Соинвест Ozon, % ≈ (наша цена с учётом наших акций − цена на сайте) / наша цена × 100."""
+    """Соинвест Ozon, % ≈ (наша цена с учётом наших акций − цена с картой на сайте) / наша цена × 100."""
     if not seller_price or not site_price:
         return None
     return round((seller_price - site_price) / seller_price * 100, 1)
@@ -84,7 +84,7 @@ def check_text(p, acts):
     lines = [f"🔍 <b>{html.escape(p['offer_id'])}</b> в акциях Ozon (по API, сейчас)", ""]
     for r in rows:
         lines.append(f"• «{html.escape(r['action'])}» — {'участвует' if r['in_action'] else 'можно добавить'}: "
-                     f"мин. бустинг {rub(r['min_el'])}, макс. {rub(r['max_el'])}, на сайте {rub(r['site'])}")
+                     f"мин. бустинг {rub(r['min_el'])}, макс. {rub(r['max_el'])}, с картой {rub(r['site'])}")
     if not rows:
         lines.append("Ozon не вернул этот товар ни в одной акции: ни среди участников, ни среди кандидатов. "
                      "Значит, по API вилки бустинга и цены на сайте для него сейчас нет.")
@@ -184,7 +184,7 @@ def dashboard(p, d):
              f"Арт. {html.escape(p['offer_id'])} · SKU {p['sku']}", "",
              fmt_stock(d.get("stock")),
              f"💰 Цена: <b>{rub(price)}</b>",
-             f"   с вашими акциями: {rub(d.get('seller_price'))}, на сайте: {rub(d.get('site_price'))}"]
+             f"   с вашими акциями: {rub(d.get('seller_price'))}, на сайте с картой: {rub(d.get('site_price'))}"]
     lines += boost_hint(price, d.get("elastic"))
     if d.get("actions_errors"):
         lines.append(f"   ⚠️ Ozon не отдал данные {d['actions_errors']} акций — подробно: /check {html.escape(p['offer_id'])}")
@@ -197,7 +197,7 @@ def dashboard(p, d):
         lines.append("📈 ЧП и ДРР: нет данных из ТС" + (f" ({d['ts_error']})" if d.get("ts_error") else ""))
     si = d.get("soinvest")
     lines.append(f"🤝 Соинвест сегодня: ≈{pct(si)} · {trend(si, d.get('soinvest_y'), unit='%')}" if si is not None
-                 else "🤝 Соинвест: нет цены на сайте (товара нет ни в одной акции Ozon)")
+                 else f"🤝 Соинвест: Ozon не отдал цену с картой (по API она есть только у товаров в акциях) — /check {html.escape(p['offer_id'])}")
     st = d.get("stairway")
     lines.append("📦 Скидка от количества: " + (fmt_steps(st["steps"]) if st and st["enabled"] else "нет"))
     pos = d.get("position")

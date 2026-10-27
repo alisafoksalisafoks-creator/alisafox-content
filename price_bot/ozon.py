@@ -27,6 +27,20 @@ def _money(m):
     return v or None
 
 
+def _card_price(wp):
+    """Цена на сайте = «Цена с картой» из кабинета: самая низкая green_price по схемам (FBO/FBS/rFBS).
+
+    Нет цены с картой — самая низкая обычная цена по схемам (black_price), затем средняя цена из price.
+    """
+    wp = wp or {}
+    by = [x for x in (wp.get("prices_by_schema") or {}).values() if isinstance(x, dict)]
+    for key in ("green_price", "black_price"):
+        vals = [v for v in (_money(x.get(key)) for x in by) if v]
+        if vals:
+            return min(vals)
+    return _money(wp.get("price"))
+
+
 class Ozon:
     def __init__(self, client_id=None, api_key=None):
         self.headers = {"Client-Id": client_id or os.environ["OZON_CLIENT_ID"],
@@ -156,7 +170,7 @@ class Ozon:
 
         Вилку берём из любой акции, где Ozon отдаёт price_min_elastic / price_max_elastic (цена для минимального
         и максимального бустинга), — по названию акцию не отсеиваем. Если товар в нескольких таких акциях,
-        приоритет у «Эластичного бустинга», затем у той, где товар уже участвует. Цену на сайте (website_prices)
+        приоритет у «Эластичного бустинга», затем у той, где товар уже участвует. Цену на сайте («Цена с картой» из website_prices)
         Ozon отдаёт по товарам любой акции — участникам и кандидатам; подписка не нужна.
         Сбой одной акции не роняет остальные: она попадает в errors. seen — что Ozon вернул по товару, для /check.
         """
@@ -173,7 +187,7 @@ class Ozon:
                     log.warning("акция %s, %s: %s", title, kind, e)
                     continue
                 for p in products:
-                    sp = _money((p.get("website_prices") or {}).get("price"))
+                    sp = _card_price(p.get("website_prices"))
                     if sp and p["id"] not in site:
                         site[p["id"]] = sp
                     lo, hi = _money(p.get("price_min_elastic")), _money(p.get("price_max_elastic"))
