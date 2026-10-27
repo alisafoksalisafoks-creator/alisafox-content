@@ -77,6 +77,12 @@ def boost_hint(price, el):
     return lines
 
 
+def fmt_stock(s):
+    if not s:
+        return "🏬 Остаток: нет данных Ozon"
+    return f"🏬 Остаток: FBO <b>{s['fbo']} шт</b> · FBS <b>{s['fbs']} шт</b>"
+
+
 def fmt_steps(steps):
     if not steps:
         return "нет"
@@ -157,6 +163,7 @@ def dashboard(p, d):
     price = d.get("price")
     lines = [f"📦 <b>{html.escape(p['name'][:90])}</b>",
              f"Арт. {html.escape(p['offer_id'])} · SKU {p['sku']}", "",
+             fmt_stock(d.get("stock")),
              f"💰 Цена: <b>{rub(price)}</b>" + (f" (зачёркнутая {rub(d['old_price'])})" if d.get("old_price") else ""),
              f"   с вашими акциями: {rub(d.get('seller_price'))}, у покупателя: {rub(d.get('customer_price'))}"]
     if d.get("min_price"):

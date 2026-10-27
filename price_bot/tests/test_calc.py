@@ -120,8 +120,10 @@ class TestScreens(unittest.TestCase):
     def test_dashboard_full(self):
         d = {"price": 365, "seller_price": 365, "customer_price": 320, "soinvest": 12.3, "soinvest_y": 15,
              "elastic": TestBoost.EL, "ts": {"profit": 252.55, "drr": 9.71, "drr_rk": 8.16, "period": "17.10–26.10"},
-             "stairway": {"enabled": True, "steps": [(2, 5)]}, "position": 7, "position_y": 9}
+             "stairway": {"enabled": True, "steps": [(2, 5)]}, "position": 7, "position_y": 9,
+             "stock": {"fbo": 30, "fbs": 5}}
         text = calc.dashboard(P, d)
+        self.assertLess(text.index("FBO <b>30 шт</b> · FBS <b>5 шт</b>"), text.index("💰 Цена"))
         for part in ("&lt;Bluetooth&gt;", "365 ₽", "снизьте на 14 ₽", "253 ₽", "ДРР общий 9,7%", "РК ДРР 8,2%",
                      "🔴 ▼ −2,7 п.п.", "от 2 шт −5%", "🟢 ▼ −2"):
             self.assertIn(part, text)

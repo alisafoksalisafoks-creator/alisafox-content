@@ -144,6 +144,7 @@ async def collect(p):
         "customer": ozon.customer_prices([sku]),
         "elastic": cached("elastic", 1800, ozon.elastic),
         "stairway": ozon.stairways([sku]),
+        "stock": ozon.stocks([pid]),
         "ts": ts.unit_metrics([sku], today()),
     }
     res = dict(zip(jobs, await asyncio.gather(*jobs.values(), return_exceptions=True)))
@@ -160,6 +161,7 @@ async def collect(p):
     d["soinvest"] = calc.soinvest(d.get("seller_price"), d.get("customer_price"))
     d["elastic"] = res["elastic"].get(pid) if isinstance(res["elastic"], dict) else None
     d["stairway"] = res["stairway"].get(sku) if isinstance(res["stairway"], dict) else None
+    d["stock"] = res["stock"].get(pid) if isinstance(res["stock"], dict) else None
     if isinstance(res["ts"], dict):
         d["ts"] = res["ts"].get(sku)
         if not d["ts"]:
@@ -292,11 +294,13 @@ async def show_product(msg: Message, sec, pid, edit=True):
         return await msg.answer(calc.dashboard(p, d), reply_markup=kb(
             [[("✏️ Изменить цену", f"pe:{pid}"), ("✅ Оставить", f"ca:p:{ci}:0")], [back, HOME]]))
     try:
-        st = (await ozon.stairways([p["sku"]])).get(p["sku"])
+        st, stock = await asyncio.gather(ozon.stairways([p["sku"]]), ozon.stocks([pid]))
+        st, stock = st.get(p["sku"]), stock.get(pid)
     except OzonError as e:
         return await msg.answer(f"Ozon не отдал скидку: {e}", reply_markup=nav_kb(back[1]))
     has = bool(st and st["enabled"] and st["steps"])
     text = (f"📦 <b>{html.escape(p['offer_id'])}</b> · {html.escape(p['name'][:80])}\n"
+            f"{calc.fmt_stock(stock)}\n"
             f"Скидка от количества: {calc.fmt_steps(st['steps']) if has else 'нет'}"
             + (f"\nСтатус в Ozon: {st['status']}" if st and st.get("status") not in (None, "SUCCESS") else ""))
     rows = [[("✏️ Изменить уровни" if has else "➕ Поставить скидку", f"qs:{pid}")]]

@@ -88,6 +88,20 @@ class Ozon:
                             or "Без категории"})
         return out
 
+    async def stocks(self, product_ids):
+        """{product_id: {"fbo": шт, "fbs": шт}} — сейчас на складах (FBS включает rFBS)."""
+        out = {}
+        ids = [str(i) for i in product_ids]
+        for i in range(0, len(ids), 1000):
+            r = await self.call("/v3/product/info/list", {"product_id": ids[i:i + 1000]})
+            for it in r.get("items", []):
+                s = {"fbo": 0, "fbs": 0}
+                for x in (it.get("stocks") or {}).get("stocks", []):
+                    key = "fbo" if (x.get("source") or "").lower() == "fbo" else "fbs"
+                    s[key] += x.get("present") or 0
+                out[it["id"]] = s
+        return out
+
     async def type_names(self):
         """{type_id: «FM-трансмиттер»} и {("c", description_category_id): название категории}."""
         r = await self.call("/v1/description-category/tree", {"language": "RU"})
