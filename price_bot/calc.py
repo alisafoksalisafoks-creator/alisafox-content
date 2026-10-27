@@ -88,7 +88,12 @@ def parse_steps(text):
     pairs = re.findall(r"(\d+)\s*(?:шт\.?)?\s*[-–—:/ ]\s*[−-]?\s*(\d+)\s*%?", text.replace("от", " "))
     if not pairs:
         raise ValueError("Не поняла формат. Пример: 2-5, 3-10 (от 2 шт скидка 5%, от 3 шт — 10%).")
-    steps = [(int(q), int(d)) for q, d in pairs]
+    return validate_steps([(int(q), int(d)) for q, d in pairs])
+
+
+def validate_steps(steps):
+    """Проверка уровней по правилам Ozon и здравому смыслу. Возвращает отсортированные уровни или ValueError."""
+    steps = sorted((int(q), int(d)) for q, d in steps)
     if len(steps) > MAX_STEPS:
         raise ValueError(f"Ozon разрешает не больше {MAX_STEPS} уровней.")
     for q, d in steps:
@@ -97,11 +102,32 @@ def parse_steps(text):
         if not 1 <= d <= 90:
             raise ValueError("Скидка — от 1 до 90%.")
     qs, ds = [q for q, _ in steps], [d for _, d in steps]
-    if qs != sorted(set(qs)):
-        raise ValueError("Количество в уровнях должно расти: 2, 3, 5…")
+    if len(set(qs)) != len(qs):
+        raise ValueError("Два уровня с одинаковым количеством — поправьте один.")
     if ds != sorted(ds) or len(set(ds)) != len(ds):
-        raise ValueError("Скидка должна расти от уровня к уровню: 5%, 10%…")
+        raise ValueError("Скидка должна расти от уровня к уровню: у большего количества — больше %.")
     return steps
+
+
+def editor_text(title, orig, draft, note=""):
+    """Экран редактора уровней: что сейчас в Ozon и что будет после сохранения. title уже экранирован."""
+    lines = [f"📦 Скидка от количества: <b>{title}</b>",
+             f"Сейчас в Ozon: {'у товаров разные уровни' if note else fmt_steps(orig)}"]
+    if note:
+        lines.append(note)
+    lines += ["", "<b>Будет после сохранения:</b>"]
+    if draft:
+        lines += [f"{i}) от {q} шт −{d}%" for i, (q, d) in enumerate(draft, 1)]
+    else:
+        lines.append("без скидки от количества")
+    try:
+        validate_steps(draft)
+    except ValueError as e:
+        lines += ["", f"⚠️ {e}"]
+    if sorted(map(tuple, draft)) == sorted(map(tuple, orig)):
+        lines += ["", "Изменений пока нет."]
+    lines += ["", "±1% меняет скидку уровня, ✏️ — количество и скидку, 🗑 — убрать уровень."]
+    return "\n".join(lines)
 
 
 def parse_price(text):

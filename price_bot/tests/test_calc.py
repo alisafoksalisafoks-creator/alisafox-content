@@ -20,6 +20,27 @@ class TestSteps(unittest.TestCase):
         self.assertEqual(calc.fmt_steps([]), "нет")
 
 
+class TestEditor(unittest.TestCase):
+    def test_validate_sorts_and_checks(self):
+        self.assertEqual(calc.validate_steps([[3, 8], [2, 7]]), [(2, 7), (3, 8)])
+        self.assertEqual(calc.validate_steps([]), [])
+        for bad in ([[2, 7], [2, 8]], [[2, 9], [3, 8]], [[1, 5]], [[2, 5], [3, 6], [4, 7], [5, 8], [6, 9]]):
+            with self.assertRaises(ValueError, msg=bad):
+                calc.validate_steps(bad)
+
+    def test_add_level_keeps_old(self):
+        text = calc.editor_text("OZ357NEW5", [(2, 7)], [[2, 7], [3, 8]])
+        self.assertIn("Сейчас в Ozon: от 2 шт −7%", text)
+        self.assertIn("1) от 2 шт −7%\n2) от 3 шт −8%", text)
+        self.assertNotIn("⚠️", text)
+
+    def test_warns_and_no_changes(self):
+        self.assertIn("Скидка должна расти", calc.editor_text("x", [], [[2, 9], [3, 8]]))
+        self.assertIn("Изменений пока нет", calc.editor_text("x", [(2, 7)], [[2, 7]]))
+        self.assertIn("без скидки", calc.editor_text("x", [(2, 7)], []))
+        self.assertIn("у товаров разные уровни", calc.editor_text("x", [], [], note="⚠️ разные"))
+
+
 class TestPrice(unittest.TestCase):
     def test_parse(self):
         self.assertEqual(calc.parse_price("1 290 ₽"), 1290)

@@ -23,6 +23,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, \
     ReplyKeyboardMarkup
@@ -268,7 +269,7 @@ async def show_category(msg: Message, sec, ci, page=0, edit=True):
     if nav:
         rows.append(nav)
     if sec == "q":
-        rows.append([("📦 Вся категория: поставить / изменить", f"qcs:{ci}")])
+        rows.append([("📦 Вся категория: уровни скидки", f"qcs:{ci}")])
         rows.append([("🗑 Вся категория: удалить скидку", f"qcd:{ci}")])
     rows.append([("⬅️ Категории", f"cl:{sec}:0"), HOME])
     text = f"{SECTIONS[sec]} · {html.escape(cat)}: {len(goods)} шт. Выберите артикул."
@@ -296,47 +297,176 @@ async def show_product(msg: Message, sec, pid, edit=True):
     text = (f"📦 <b>{html.escape(p['offer_id'])}</b> · {html.escape(p['name'][:80])}\n"
             f"Скидка от количества: {calc.fmt_steps(st['steps']) if has else 'нет'}"
             + (f"\nСтатус в Ozon: {st['status']}" if st and st.get("status") not in (None, "SUCCESS") else ""))
-    rows = [[("✏️ Изменить" if has else "➕ Поставить скидку", f"qs:{pid}")]]
+    rows = [[("✏️ Изменить уровни" if has else "➕ Поставить скидку", f"qs:{pid}")]]
     if has:
-        rows[0].append(("🗑 Удалить", f"qd:{pid}"))
+        rows[0].append(("🗑 Удалить все", f"qd:{pid}"))
     rows.append([back, HOME])
     await (msg.edit_text(text, reply_markup=kb(rows)) if edit else msg.answer(text, reply_markup=kb(rows)))
 
 
 # --- скидка от количества ---
 
-STEPS_HELP = ("Пришлите уровни одним сообщением: количество-скидка через запятую.\n"
-              "Пример: <code>2-5, 3-10</code> — от 2 шт скидка 5%, от 3 шт — 10%.\n"
-              "До 4 уровней, скидка только в %.")
+drafts: dict[int, dict] = {}  # редактор уровней скидки: черновик до «Сохранить»
 
 
-async def ask_steps(cb: CallbackQuery, targets, title, back):
-    waiting[cb.from_user.id] = {"kind": "steps", "targets": targets, "title": title, "back": back}
-    await cb.message.answer(f"Скидка от количества для: {title}\n\n{STEPS_HELP}", reply_markup=cancel_kb(back))
-
-
-async def got_steps(msg: Message, w):
-    try:
-        steps = calc.parse_steps(msg.text or "")
-    except ValueError as e:
-        return await msg.answer(f"{e}\nПришлите ещё раз или нажмите «Отмена».", reply_markup=cancel_kb(w["back"]))
-    waiting.pop(msg.from_user.id, None)
+async def open_editor(cb: CallbackQuery, pids, title, back):
+    """Редактор берёт текущие уровни из Ozon; у категории — общие уровни, если у всех товаров они одинаковые."""
     goods = await items()
-    targets = [product(goods, pid) for pid in w["targets"]]
-    targets = [t for t in targets if t]
+    targets = [t for t in (product(goods, pid) for pid in pids) if t]
     current = await ozon.stairways([t["sku"] for t in targets])
-    lines = [f"Ставим скидку от количества: <b>{w['title']}</b>", f"Станет: {calc.fmt_steps(steps)}", ""]
-    for t in targets[:15]:
-        c = current.get(t["sku"])
-        lines.append(f"{t['offer_id']}: {calc.fmt_steps(c['steps']) if c and c['enabled'] else 'нет'} → "
-                     f"{calc.fmt_steps(steps)}")
-    if len(targets) > 15:
-        lines.append(f"…и ещё {len(targets) - 15}")
-    pending[msg.from_user.id] = {"kind": "steps", "back": w["back"],
-                                 "items": [(t["sku"], True, steps) for t in targets],
-                                 "names": {t["sku"]: t["offer_id"] for t in targets},
-                                 "summary": f"скидка от количества {w['title']}: {calc.fmt_steps(steps)}"}
-    await msg.answer("\n".join(lines + ["", "Точно применяем?"]), reply_markup=confirm_kb(w["back"]))
+    variants = {tuple(c["steps"]) if (c := current.get(t["sku"])) and c["enabled"] else () for t in targets}
+    orig = list(variants.pop()) if len(variants) == 1 else []
+    note = "" if len(targets) == 1 or len(variants) == 0 else \
+        "⚠️ У товаров категории сейчас разные уровни. После сохранения у всех станут одинаковые."
+    drafts[cb.from_user.id] = {"targets": [t["product_id"] for t in targets], "title": title, "back": back,
+                               "orig": orig, "steps": [list(x) for x in orig], "note": note,
+                               "current": {t["sku"]: current.get(t["sku"]) for t in targets}}
+    await show_editor(cb.message, cb.from_user.id, edit=False)
+
+
+def editor_kb(dr):
+    rows = []
+    for i, (q, d) in enumerate(dr["steps"]):
+        n = "①②③④"[i]
+        rows.append([(f"{n} −1%", f"dq:-:{i}"), (f"{n} +1%", f"dq:+:{i}"), (f"{n} ✏️", f"dq:e:{i}"),
+                     (f"{n} 🗑", f"dq:x:{i}")])
+    extra = []
+    if len(dr["steps"]) < calc.MAX_STEPS:
+        extra.append(("➕ Добавить уровень", "dq:a"))
+    if dr["steps"]:
+        extra.append(("🗑 Убрать все", "dq:c"))
+    if extra:
+        rows.append(extra)
+    rows.append([("✅ Сохранить", "dq:s"), ("❌ Отмена", f"no|{dr['back']}")])
+    rows.append([HOME])
+    return kb(rows)
+
+
+async def show_editor(msg: Message, uid, edit=True):
+    dr = drafts[uid]
+    text = calc.editor_text(dr["title"], dr["orig"], dr["steps"], dr["note"])
+    if not edit:
+        return await msg.answer(text, reply_markup=editor_kb(dr))
+    try:
+        await msg.edit_text(text, reply_markup=editor_kb(dr))
+    except TelegramBadRequest:
+        pass  # ничего не поменялось (например, −1% у скидки 1%) — Telegram не даёт «править» тем же текстом
+
+
+def next_qty(steps):
+    return (max(q for q, _ in steps) + 1) if steps else 2
+
+
+async def on_editor(cb: CallbackQuery, a):
+    uid = cb.from_user.id
+    dr = drafts.get(uid)
+    if not dr:
+        return await cb.message.answer("Редактор уже закрыт. Откройте товар заново.", reply_markup=nav_kb())
+    op = a[1]
+    if op in "+-":
+        i = int(a[2])
+        dr["steps"][i][1] = max(1, min(90, dr["steps"][i][1] + (1 if op == "+" else -1)))
+        return await show_editor(cb.message, uid)
+    if op == "x":
+        del dr["steps"][int(a[2])]
+        return await show_editor(cb.message, uid)
+    if op == "c":
+        dr["steps"] = []
+        return await show_editor(cb.message, uid)
+    if op in ("a", "e"):
+        # шаг 1 из 2: количество. Для нового уровня подсказываем следующее после последнего
+        dr["edit"] = int(a[2]) if op == "e" else None
+        others = [x for j, x in enumerate(dr["steps"]) if j != dr["edit"]]
+        start = dr["steps"][dr["edit"]][0] if op == "e" else next_qty(others)
+        opts = sorted({start, start + 1, start + 2, start + 3, 5, 10} - {q for q, _ in others} - {0, 1})[:6]
+        waiting[uid] = {"kind": "dq_qty", "back": dr["back"]}
+        return await cb.message.edit_text("От скольких штук действует уровень? Нажмите или пришлите число.",
+                                          reply_markup=kb([[(f"от {q} шт", f"dq:q:{q}") for q in opts[:3]],
+                                                           [(f"от {q} шт", f"dq:q:{q}") for q in opts[3:]],
+                                                           [("⬅️ К уровням", "dq:v")]]))
+    if op == "q":
+        return await ask_pct(cb.message, uid, int(a[2]))
+    if op == "d":
+        return await put_level(cb.message, uid, int(a[2]))
+    if op == "v":
+        waiting.pop(uid, None)
+        return await show_editor(cb.message, uid)
+    if op == "s":
+        return await save_editor(cb, uid)
+
+
+async def ask_pct(msg: Message, uid, qty, edit=True):
+    """Шаг 2 из 2: скидка. Подсказки — чуть больше, чем у уровня с меньшим количеством."""
+    dr = drafts[uid]
+    dr["qty"] = qty
+    others = [x for j, x in enumerate(dr["steps"]) if j != dr.get("edit")]
+    below = max((d for q, d in others if q < qty), default=0)
+    cur = dr["steps"][dr["edit"]][1] if dr.get("edit") is not None else None
+    opts = sorted({x for x in (cur, below + 1, below + 2, below + 3, below + 5, below + 10) if x and x <= 90})[:6]
+    waiting[uid] = {"kind": "dq_pct", "back": dr["back"]}
+    text = f"Уровень от {qty} шт. Какая скидка, %? Нажмите или пришлите число."
+    markup = kb([[(f"−{d}%", f"dq:d:{d}") for d in opts[:3]], [(f"−{d}%", f"dq:d:{d}") for d in opts[3:]],
+                 [("⬅️ К уровням", "dq:v")]])
+    await (msg.edit_text(text, reply_markup=markup) if edit else msg.answer(text, reply_markup=markup))
+
+
+async def put_level(msg: Message, uid, pct, edit=True):
+    dr = drafts[uid]
+    waiting.pop(uid, None)
+    if dr.get("edit") is not None:
+        dr["steps"][dr["edit"]] = [dr["qty"], pct]
+    else:
+        dr["steps"].append([dr["qty"], pct])
+    dr["steps"].sort()
+    dr["edit"] = None
+    await show_editor(msg, uid, edit=edit)
+
+
+async def got_level_number(msg: Message, w):
+    """Число вместо кнопки на шаге «количество» или «скидка»."""
+    uid = msg.from_user.id
+    t = (msg.text or "").strip().replace("%", "").replace("шт", "").strip()
+    if not t.isdigit():
+        return await msg.answer("Нужно целое число, например 3.", reply_markup=kb([[("⬅️ К уровням", "dq:v")]]))
+    n = int(t)
+    if w["kind"] == "dq_qty":
+        if n < 2:
+            return await msg.answer("Количество — от 2 шт.", reply_markup=kb([[("⬅️ К уровням", "dq:v")]]))
+        return await ask_pct(msg, uid, n, edit=False)
+    if not 1 <= n <= 90:
+        return await msg.answer("Скидка — от 1 до 90%.", reply_markup=kb([[("⬅️ К уровням", "dq:v")]]))
+    await put_level(msg, uid, n, edit=False)
+
+
+async def save_editor(cb: CallbackQuery, uid):
+    dr = drafts[uid]
+    try:
+        steps = calc.validate_steps(dr["steps"])
+    except ValueError as e:
+        return await cb.message.answer(f"⚠️ {e} Поправьте уровни и нажмите «Сохранить» ещё раз.")
+    goods = await items()
+    targets = [t for t in (product(goods, pid) for pid in dr["targets"]) if t]
+    jobs, lines = [], [f"Скидка от количества: <b>{dr['title']}</b>", ""]
+    for t in targets:
+        c = dr["current"].get(t["sku"])
+        was = c["steps"] if c and c["enabled"] else []
+        if was == steps:
+            continue  # у этого товара уже так
+        if steps:
+            jobs.append((t["sku"], True, steps))
+        elif was:
+            jobs.append((t["sku"], False, was))  # Ozon выключает скидку только вместе с текущими уровнями
+        if len(jobs) <= 15:
+            lines.append(f"{t['offer_id']}: {calc.fmt_steps(was)} → {calc.fmt_steps(steps)}")
+    if not jobs:
+        return await cb.message.answer("Изменений нет — сохранять нечего.")
+    if len(jobs) > 15:
+        lines.append(f"…и ещё {len(jobs) - 15}")
+    drafts.pop(uid, None)
+    pending[uid] = {"kind": "steps", "back": dr["back"], "items": jobs,
+                    "names": {t["sku"]: t["offer_id"] for t in targets},
+                    "summary": f"скидка от количества {dr['title']}: {calc.fmt_steps(steps)}"}
+    await cb.message.edit_text("\n".join(lines + ["", "Точно применяем?"]), reply_markup=confirm_kb(dr["back"]))
 
 
 async def ask_delete(cb: CallbackQuery, pids, title, back):
@@ -502,8 +632,8 @@ async def on_message(msg: Message):
     if w["kind"] == "add":
         return await add_by_id(msg)
     try:
-        if w["kind"] == "steps":
-            return await got_steps(msg, w)
+        if w["kind"] in ("dq_qty", "dq_pct"):
+            return await got_level_number(msg, w)
         if w["kind"] == "price":
             return await got_price(msg, w)
     except OzonError as e:
@@ -531,6 +661,7 @@ async def route(cb: CallbackQuery, data):
     uid = cb.from_user.id
     if data == "home" or data.startswith("no|"):
         waiting.pop(uid, None)
+        drafts.pop(uid, None)
         had = pending.pop(uid, None)
         try:
             await cb.message.edit_reply_markup(reply_markup=None)
@@ -557,7 +688,7 @@ async def route(cb: CallbackQuery, data):
                                            reply_markup=cancel_kb(back))
         if a[0] == "qs":
             p = product(await items(), int(a[1]))
-            return await ask_steps(cb, [p["product_id"]], p["offer_id"], f"pr:q:{p['product_id']}n")
+            return await open_editor(cb, [p["product_id"]], html.escape(p["offer_id"]), f"pr:q:{p['product_id']}n")
         if a[0] == "qd":
             p = product(await items(), int(a[1]))
             return await ask_delete(cb, [p["product_id"]], p["offer_id"], f"pr:q:{p['product_id']}n")
@@ -566,7 +697,9 @@ async def route(cb: CallbackQuery, data):
             pids = [g["product_id"] for g in goods]
             title = f"вся категория «{html.escape(cat)}» ({len(pids)} шт.)"
             back = f"ca:q:{a[1]}:0n"
-            return await (ask_steps(cb, pids, title, back) if a[0] == "qcs" else ask_delete(cb, pids, title, back))
+            return await (open_editor(cb, pids, title, back) if a[0] == "qcs" else ask_delete(cb, pids, title, back))
+        if a[0] == "dq":
+            return await on_editor(cb, a)
         if a[0] == "ok":
             job = pending.pop(uid, None)
             await cb.message.edit_reply_markup(reply_markup=None)
