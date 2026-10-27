@@ -126,15 +126,15 @@ def product(goods, pid):
     return next((g for g in goods if g["product_id"] == pid), None)
 
 
-async def analytics(name, day, load):
-    """Запрос аналитики Ozon: по одному за раз и не чаще раза в минуту. Кэш на час."""
+async def analytics(name, day, load, ttl=3600):
+    """Запрос аналитики Ozon: по одному за раз и не чаще раза в минуту. Кэш на час (за вчера — на сутки)."""
     async def run():
         async with ozon_lock:
             try:
                 return await load(day.isoformat())
             finally:
                 await asyncio.sleep(61)  # следующий запрос аналитики — не раньше чем через минуту
-    return await cached(f"{name}:{day}", 3600, run)
+    return await cached(f"{name}:{day}", ttl, run)
 
 
 async def collect(p):
@@ -158,16 +158,6 @@ async def collect(p):
         d["commission"] = pr["sale_percent"] + acq
     acts = res["actions"] if isinstance(res["actions"], dict) else {"elastic": {}, "site": {}}
     d["site_price"] = acts["site"].get(pid)
-    if not d["site_price"]:
-        # товара нет в акциях — цены с картой по API нет; берём среднюю цену заказов из аналитики Ozon
-        for day, label in ((today(), "сегодня"), (today() - dt.timedelta(days=1), "вчера")):
-            s = store.snapshot(day.isoformat()).get(sku, {})
-            if s.get("avg_price"):
-                d["site_price"], d["site_src"] = s["avg_price"], f"средняя цена заказов {label}, {s['avg_units']} шт"
-                break
-    d["soinvest"] = calc.soinvest(d.get("seller_price"), d.get("site_price"))
-    d["elastic"] = acts["elastic"].get(pid)
-    d["actions_errors"] = len(acts.get("errors") or [])
     d["stairway"] = res["stairway"].get(sku) if isinstance(res["stairway"], dict) else None
     d["stock"] = res["stock"].get(pid) if isinstance(res["stock"], dict) else None
     if isinstance(res["ts"], dict):
@@ -177,10 +167,12 @@ async def collect(p):
     else:
         d["ts_error"] = str(res["ts"])[:80]
     t, y = today(), today() - dt.timedelta(days=1)
-    store.save_snapshot(t.isoformat(), {sku: {"soinvest": d["soinvest"]}})
     snap_y = store.snapshot(y.isoformat()).get(sku, {})
+    snap_t = store.snapshot(t.isoformat()).get(sku, {})
+    d["soinvest"], d["soinvest_at"], d["soinvest_src"] = (snap_t.get("soinvest"), snap_t.get("soinvest_at"),
+                                                          snap_t.get("site_src"))
     d["soinvest_y"] = snap_y.get("soinvest")
-    d["position"] = store.snapshot(t.isoformat()).get(sku, {}).get("position")
+    d["position"] = snap_t.get("position")
     d["position_y"] = snap_y.get("position")
     if d["position"] is None and d["position_y"] is not None:
         # за сегодня Ozon ещё не посчитал — показываем вчера против позавчера
@@ -584,36 +576,82 @@ def cancel_kb(back):
 # --- снимки на каждый день: соинвест и место в выдаче ---
 
 async def daily_snapshots():
-    """Каждый час сохраняет соинвест, среднюю цену заказов и место в выдаче по всем SKU — для «сегодня / вчера».
+    """Раз в 3 часа сохраняет место в выдаче по всем SKU — для «сегодня / вчера». Вчерашнее — один раз за день.
 
-    У AlisaFox Premium Plus: лимита 50 запросов аналитики в сутки нет, место в выдаче доступно.
+    Соинвест тут не считаем: он по кнопке «🤝 Соинвест», чтобы не тратить запросы аналитики Ozon.
     """
     while True:
         try:
-            goods = await items()
             day, y = today(), today() - dt.timedelta(days=1)
-            prices = await ozon.prices([g["product_id"] for g in goods])
-            site = (await cached("actions", 1800, ozon.actions))["site"]
-            avg = await safe(analytics("avg", day, ozon.avg_prices))
-            if not any("avg_price" in v for v in store.snapshot(y.isoformat()).values()):
-                ya = await safe(analytics("avg", y, ozon.avg_prices))
-                store.save_snapshot(y.isoformat(), {sku: {"avg_price": a, "avg_units": n} for sku, (a, n) in ya.items()})
-            values = {}
-            for g in goods:
-                a, n = avg.get(g["sku"], (None, None))
-                si = calc.soinvest((prices.get(g["product_id"]) or {}).get("seller_price"),
-                                   site.get(g["product_id"]) or a)
-                values[g["sku"]] = {"soinvest": si, "avg_price": a, "avg_units": n}
-            for sku, pos in (await safe(analytics("pos", day, ozon.positions))).items():
-                values.setdefault(sku, {})["position"] = pos
-            store.save_snapshot(day.isoformat(), values)
+            pos = await safe(analytics("pos", day, ozon.positions))
+            store.save_snapshot(day.isoformat(), {sku: {"position": v} for sku, v in pos.items()})
             # аналитика Ozon за сегодня может быть ещё пустой — держим и вчерашнее место
-            store.save_snapshot(y.isoformat(), {sku: {"position": pos} for sku, pos in
-                                                (await safe(analytics("pos", y, ozon.positions))).items()})
-            log.info("снимок за %s: %s SKU, средняя цена заказов у %s", day, len(values), len(avg))
+            if not any("position" in v for v in store.snapshot(y.isoformat()).values()):
+                store.save_snapshot(y.isoformat(), {sku: {"position": v} for sku, v in
+                                                    (await safe(analytics("pos", y, ozon.positions))).items()})
+            log.info("место в выдаче за %s: %s SKU", day, len(pos))
         except Exception:
             log.exception("снимок не удался")
-        await asyncio.sleep(3600)
+        await asyncio.sleep(3 * 3600)
+
+
+SOINVEST_AT = (9, 15, 23)  # часы по Москве, когда бот сам считает соинвест по всем товарам
+
+
+async def soinvest_job():
+    """Соинвест по всем товарам 3 раза в день (9:00, 15:00, 23:00 МСК): 1–2 запроса аналитики на все SKU сразу."""
+    first = not any("soinvest" in v for v in store.snapshot(today().isoformat()).values())
+    while True:
+        now = dt.datetime.now(MSK)
+        nxt = now if first else min(now.replace(hour=h, minute=0, second=0, microsecond=0) + dt.timedelta(days=d)
+                  for h in SOINVEST_AT for d in (0, 1)
+                  if now.replace(hour=h, minute=0, second=0, microsecond=0) + dt.timedelta(days=d) > now)
+        first = False  # после запуска считаем сразу, если за сегодня ещё не считали
+        await asyncio.sleep((nxt - now).total_seconds())
+        try:
+            res = await soinvest(await items())
+            log.info("соинвест посчитан у %s из %s товаров", sum(r["soinvest"] is not None for r in res.values()),
+                     len(res))
+        except Exception:
+            log.exception("соинвест не посчитан")
+
+
+async def soinvest(goods):
+    """{sku: {seller_price, site_price, site_src, soinvest}} и запись в снимок дня.
+
+    Цена для покупателя: «Цена с картой» из акций Ozon (это не аналитика, лимит не тратит). Нет её — средняя цена
+    заказов за сегодня, затем за вчера из аналитики Ozon: один запрос на все SKU.
+    """
+    pids = [g["product_id"] for g in goods]
+    pr, acts = await asyncio.gather(ozon.prices(pids), cached("actions", 1800, ozon.actions), return_exceptions=True)
+    pr = pr if isinstance(pr, dict) else {}
+    site = acts["site"] if isinstance(acts, dict) else {}
+    t, y = today(), today() - dt.timedelta(days=1)
+    need = [g for g in goods if not site.get(g["product_id"])]
+    avg = {}
+    for day, label in ((t, "сегодня"), (y, "вчера")):
+        left = [g for g in need if g["sku"] not in avg]
+        if not left:
+            break
+        got = await safe(analytics("avg", day, ozon.avg_prices, ttl=3600 if day == t else 86400))
+        for g in left:
+            if got.get(g["sku"]):
+                a, n = got[g["sku"]]
+                avg[g["sku"]] = (a, f"средняя цена заказов {label}, {n} шт")
+    out, save = {}, {}
+    stamp = dt.datetime.now(MSK).strftime("%H:%M")
+    for g in goods:
+        r = {"seller_price": (pr.get(g["product_id"]) or {}).get("seller_price")}
+        if site.get(g["product_id"]):
+            r["site_price"], r["site_src"] = site[g["product_id"]], "цена с картой на сайте"
+        elif g["sku"] in avg:
+            r["site_price"], r["site_src"] = avg[g["sku"]]
+        r["soinvest"] = calc.soinvest(r["seller_price"], r.get("site_price"))
+        if r["soinvest"] is not None:
+            save[g["sku"]] = {"soinvest": r["soinvest"], "soinvest_at": stamp, "site_src": r["site_src"]}
+        out[g["sku"]] = r
+    store.save_snapshot(t.isoformat(), save)
+    return out
 
 
 async def safe(coro):
@@ -811,6 +849,7 @@ async def main():
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     ozon = Ozon()
     asyncio.create_task(daily_snapshots())
+    asyncio.create_task(soinvest_job())
     try:
         await dp.start_polling(bot)
     finally:

@@ -184,9 +184,8 @@ def dashboard(p, d):
              f"Арт. {html.escape(p['offer_id'])} · SKU {p['sku']}", "",
              fmt_stock(d.get("stock")),
              f"💰 Цена: <b>{rub(price)}</b>",
-             f"   с вашими акциями: {rub(d.get('seller_price'))}, "
-             + (f"{d['site_src']}: {rub(d.get('site_price'))}" if d.get('site_src')
-                else f"на сайте с картой: {rub(d.get('site_price'))}")]
+             f"   с вашими акциями: {rub(d.get('seller_price'))}"
+             + (f", на сайте с картой: {rub(d['site_price'])}" if d.get('site_price') else "")]
     lines += boost_hint(price, d.get("elastic"))
     if d.get("actions_errors"):
         lines.append(f"   ⚠️ Ozon не отдал данные {d['actions_errors']} акций — подробно: /check {html.escape(p['offer_id'])}")
@@ -198,8 +197,10 @@ def dashboard(p, d):
     else:
         lines.append("📈 ЧП и ДРР: нет данных из ТС" + (f" ({d['ts_error']})" if d.get("ts_error") else ""))
     si = d.get("soinvest")
-    lines.append(f"🤝 Соинвест сегодня: ≈{pct(si)} · {trend(si, d.get('soinvest_y'), unit='%')}" if si is not None
-                 else f"🤝 Соинвест: нет цены с картой (товара нет в акциях) и заказов за сегодня и вчера — /check {html.escape(p['offer_id'])}")
+    src = " по средней цене заказов, примерно" if "заказов" in (d.get("soinvest_src") or "") else ""
+    lines.append(f"🤝 Соинвест (на {d.get('soinvest_at') or 'сегодня'}{src}): ≈{pct(si)} · "
+                 f"{trend(si, d.get('soinvest_y'), unit='%')}" if si is not None
+                 else "🤝 Соинвест: сегодня ещё не посчитан (бот считает в 9:00, 15:00 и 23:00 МСК)")
     st = d.get("stairway")
     lines.append("📦 Скидка от количества: " + (fmt_steps(st["steps"]) if st and st["enabled"] else "нет"))
     pos = d.get("position")
