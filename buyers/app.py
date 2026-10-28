@@ -7,6 +7,7 @@ OZON_BOT_CLIENT_ID / OZON_BOT_API_KEY (или OZON_CLIENT_ID / OZON_API_KEY); н
 
 Меню: 👥 Покупатели, ➕ Добавить ID, ✏️ Редактировать (имя → изменить имя / удалить). Покупатели → имя (или «Выкупы всего») → Сегодня / 7 дней / Месяц → 🔢 Штуки / 📋 Детали / 🔑 Ключи.
 «📍 Места в выдаче» (старт) — 7 дней / месяц: артикулы, купленные покупателями из списка, × дни, место за день.
+«👤 Имена» (только у «Выкупы всего») — список аккаунтов, по клику итог покупателя за период: шт., заказы, сумма.
 «🔑 Ключи» — топ-5 запросов по заказам для каждого купленного артикула (по всему кабинету).
 «Штуки» — только число по дням (у «Выкупы всего» — по именам). «Детали» — артикул, штуки, сумма в заказе
 и сколько заплатил покупатель. Отменённые заказы в штуки не идут, пишутся примечанием.
@@ -129,12 +130,40 @@ def edit_kb():
 
 
 def views_kb(who, kind):
+    names = [[("👤 Имена", f"n:{kind}")]] if who == "all" else []
     return kb([[("🔢 Штуки", f"v:{who}:{kind}:q"), ("📋 Детали", f"v:{who}:{kind}:d"),
-                ("🔑 Ключи", f"v:{who}:{kind}:k")],
-               [("⬅️ Период", f"b:{who}"), ("👥 Список", "b"), ("🏠 Меню", "menu")]])
+                ("🔑 Ключи", f"v:{who}:{kind}:k")]] + names +
+              [[("⬅️ Период", f"b:{who}"), ("👥 Список", "b"), ("🏠 Меню", "menu")]])
 
 
 # --- отчёты ---
+
+def names_kb(kind):
+    """«Выкупы всего» → Имена: аккаунты списка, по клику — итог покупателя за тот же период."""
+    bs = store.buyers(db)
+    rows = [[(f"👤 {short(name, 18)}", f"nb:{kind}:{bid}") for bid, name in bs[i:i + 2]] for i in range(0, len(bs), 2)]
+    return kb(rows + [[("⬅️ Выкупы всего", f"p:all:{kind}"), ("🏠 Меню", "menu")]])
+
+
+def buyer_total(bid, kind):
+    """Итог одного покупателя за период: штуки, заказы, сумма в заказах и сколько заплатил."""
+    start, end, label = report.period(kind)
+    lines = store.buyer_lines(db, [bid], start, end)
+    report.fill_customer_prices(db, oz, lines)
+    act = report.active(lines)
+    qty = sum(x["qty"] for x in act)
+    orders = len({x["posting"].rsplit("-", 1)[0] for x in act})
+    total = sum(x["price"] * x["qty"] for x in act)
+    paid = None if any(x["customer_price"] is None for x in act) else sum(x["customer_price"] * x["qty"] for x in act)
+    canc = report.cancelled_qty(lines)
+    out = [f"👤 {store.buyer_name(db, bid)} · ID {bid}", label, "",
+           f"Купил: {qty} шт.", f"Заказов: {orders}", f"В заказах: {money(total)}"]
+    if act:
+        out.append(f"Заплатил: {money(paid)}")
+    if canc:
+        out.append(f"Отменено: {canc} шт. (в итог не вошло)")
+    return "\n".join(out)
+
 
 def build(who, kind, view, prefix):
     """(картинки, подпись)."""
@@ -304,6 +333,14 @@ async def button(cb: CallbackQuery):
             _, who, kind = d.split(":")
             await msg.answer(f"{title_of(who)} · {report.period(kind)[2]}. Как показать?",
                              reply_markup=views_kb(who, kind))
+        elif d.startswith("n:"):
+            await msg.answer(f"Выкупы всего · {report.period(d[2:])[2]}. Чей итог показать?",
+                             reply_markup=names_kb(d[2:]))
+        elif d.startswith("nb:"):
+            _, kind, bid = d.split(":")
+            if not fresh():
+                await asyncio.to_thread(ensure_fresh)
+            await msg.answer(await asyncio.to_thread(locked, buyer_total, int(bid), kind), reply_markup=names_kb(kind))
         elif d.startswith("v:"):
             _, who, kind, view = d.split(":")
             if state["loading"]:
