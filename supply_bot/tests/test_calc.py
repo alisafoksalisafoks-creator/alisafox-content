@@ -49,14 +49,14 @@ def test_need_per_warehouse_rounded_to_boxes_and_limited_by_our_stock():
     plan = calc.build(s)
     by = {ln.warehouse: ln for ln in plan.lines}
     msk = by["Москва, МО и Дальние регионы"]
-    # Москва — кластер: 10/дн × 30 дн от сегодня − 50 = 250 → полные короба по 50
-    assert msk.need == 250 and msk.qty % 50 == 0 and msk.box_count == msk.qty // 50 and msk.ship_to == MSK1
-    # Казань — направление «кластер»: 2/дн × 30 − 10 = 50 → 50 или 100, только целые короба
+    # Москва — кластер: 140 шт за 14 дн × 2 − 50 = 230 → полные короба по 50
+    assert msk.need == 230 and msk.qty % 50 == 0 and msk.box_count == msk.qty // 50 and msk.ship_to == MSK1
+    # Казань — направление «кластер»: 2/дн × 28 − 10 = 46 → 50, только целые короба
     assert by["Казань"].qty in (50, 100) and by["Казань"].ship_to == KZN
 
 
 def test_box_never_split_between_directions():
-    s = snap(sales("OZ1", MSK1, 10) + sales("OZ1", SPB, 10), ms={"OZ1": 10000},
+    s = snap(sales("OZ1", MSK1, 25) + sales("OZ1", SPB, 25), ms={"OZ1": 10000},
              units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("61×40×33", 600)]})
     plan = calc.build(s)
     for ln in plan.lines:
@@ -134,7 +134,7 @@ def test_cluster_is_one_direction_outside_moscow():
     plan = calc.build(s)
     spb = [ln for ln in plan.lines if ln.cluster == "Санкт-Петербург и СЗО"]
     assert len(spb) == 1 and spb[0].warehouse == "Санкт-Петербург и СЗО" and spb[0].ship_to == SPB
-    assert spb[0].need == 10 * 30 - 40
+    assert spb[0].need == 10 * 28 - 40
 
 
 def test_moscow_is_one_cluster():
@@ -142,7 +142,7 @@ def test_moscow_is_one_cluster():
              ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")})
     plan = calc.build(s)
     msk = [ln for ln in plan.lines if ln.cluster.startswith("Москва")]
-    assert len(msk) == 1 and msk[0].need == 8 * 30 - 100
+    assert len(msk) == 1 and msk[0].need == 8 * 28 - 100
 
 
 def test_order_only_profitable_items_missing_on_our_stock():
@@ -153,7 +153,7 @@ def test_order_only_profitable_items_missing_on_our_stock():
     plan = calc.build(s)
     got = {x["offer"]: x for x in plan.order}
     assert set(got) == {"OZ1", "OZ3"}                     # минусовой OZ2 не заказываем
-    assert got["OZ1"]["order"] == 5 * 30 and got["OZ3"]["order"] == 5 * 30 - got["OZ3"]["ship"]
+    assert got["OZ1"]["order"] == 5 * 28 and got["OZ3"]["order"] == 5 * 28 - got["OZ3"]["ship"]
     assert all(ln.offer != "OZ1" for ln in plan.lines)  # в распределении только то, что есть у нас
     why = {x["offer"]: x["why"] for x in plan.order_skipped}
     assert why["OZ2"] == "минусовой артикул" and why["OZ4"].startswith("прибыль не посчитать")
@@ -223,13 +223,13 @@ def test_shortage_priority_cluster_14_days_others_7():
              stocks=[("OZ1", MSK1, 100, 0), ("OZ1", SPB, 50, 0)], ms={"OZ1": 600}, units={"OZ1": unit("OZ1")})
     by = {ln.warehouse: ln.qty for ln in calc.build(s).lines}
     # Москва — 57% продаж, приоритетная: 14 дней = 180; Казань 7 дней = 70; Питеру 50 шт уже хватает на 10 дней;
-    # остаток 350 — по продажам до потребности: Москве до 500, остальное Казани
-    assert by == {"Москва, МО и Дальние регионы": 500, "Казань": 100}
+    # остаток 350 — по продажам до потребности: Москве до 460, остальное Казани
+    assert by == {"Москва, МО и Дальние регионы": 460, "Казань": 140}
     plan = calc.build(s)
-    assert all("не хватает ФФ: потребность всех кластеров 900 шт больше свободного на ФФ 600 шт" in ln.flags[0]
+    assert all("не хватает ФФ: потребность всех кластеров 830 шт больше свободного на ФФ 600 шт" in ln.flags[0]
                for ln in plan.lines)
 
 
-def test_horizon_30_days_from_today_but_14_after_arrival():
-    assert config.horizon(7) == 30 and config.horizon(3) == 30
-    assert config.horizon(16) == 30 and config.horizon(30) == 44   # Дальний Восток: доставка 30 дн + 14 после прихода
+def test_horizon_owner_formula_28_days_but_14_after_arrival():
+    assert config.horizon(7) == 28 and config.horizon(3) == 28
+    assert config.horizon(14) == 28 and config.horizon(30) == 44   # Дальний Восток: доставка 30 дн + 14 после прихода
