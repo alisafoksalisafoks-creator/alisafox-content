@@ -89,7 +89,7 @@ def warehouse(plan, name):
             f"{fmt(sum(x.qty for x in items))} шт, {sum(x.box_count for x in items)} коробов, отгрузка {plan.ship_date:%d.%m}",
             "",
             "<b>Как считаю</b>: скорость = отгрузки кластера за 14 дн ÷ 14 × сезон. "
-            f"Потребность = скорость × (срок L + {config.TARGET_DAYS}) − (доступно + в пути на Ozon). "
+            f"Потребность = скорость × {config.TARGET_DAYS} дн от сегодня (доставка внутри, после прихода не меньше {config.MIN_AFTER_DAYS} дн) − (доступно + в пути на Ozon). "
             "Опт (заказ от 10 шт) в спрос не беру, разовый всплеск считаю как обычный день — 🟧; всплески чаще раза в неделю — 📈 спрос растёт. "
             "Везём в пределах нашего склада: полные короба; сверх короба от половины маленького короба — ещё короб; потребность меньше половины маленького короба — 🟨 неполный короб (до 10 шт вверх).", ""]
     rows = []
@@ -100,7 +100,7 @@ def warehouse(plan, name):
         part += DEMAND_ICON.get(ln.demand, "")
         rows.append(f"{ICON[ln.priority]} {part}<code>{escape(ln.offer)}</code> — <b>{fmt(ln.qty)}</b> шт ({_boxes(ln)}) · "
                     f"{ln.speed:.1f}/дн, запас {days}{flag}\n"
-                    f"   {ln.sales14} шт за 14 дн → {ln.speed:.1f}/дн × ({ln.lead}+{config.TARGET_DAYS}) − "
+                    f"   {ln.sales14} шт за 14 дн → {ln.speed:.1f}/дн × {config.horizon(ln.lead)} дн − "
                     f"{fmt(ln.have)} на Ozon = {fmt(ln.need)} → везём {fmt(ln.qty)}"
                     + ("" if ln.qty == ln.need else " (по коробам, в пределах нашего склада)"))
     return chunks(head + rows + stop)
@@ -160,7 +160,7 @@ def order(plan):
     lines = ["<b>🛒 Заказать</b>",
              "На Ozon скоро закончится или уже 0, а на нашем складе нет или не хватает. Только прибыльные артикулы.",
              "Прибыль на 1 шт бот считает сам по отчётам Ozon с 1-го числа прошлого месяца, минус себестоимость и УСН 7%.",
-             "Заказать = потребность кластеров на срок L + 30 дн − всё, что есть на нашем складе.", ""]
+             f"Заказать = потребность кластеров на {config.TARGET_DAYS} дн от сегодня − всё, что есть на нашем складе.", ""]
     for x in plan.order:
         when = "на Ozon уже 0" if x["ozon"] <= 0 else f"на Ozon хватит на {x['days']:.0f} дн"
         lines.append(f"<code>{escape(x['offer'])}</code> — заказать <b>{fmt(x['order'])}</b> шт · {when} · "

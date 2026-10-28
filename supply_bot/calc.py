@@ -2,7 +2,7 @@
 
 Направление поставки — только кластер целиком, без отдельных складов (решение владельца 25.10.2026).
 Склад приёмки — подсказка: наш основной склад кластера по отгрузкам за 30 дней.
-Потребность кластера = отгрузки FBO из кластера за 14 дн ÷ 14 × коэф. сезона × (L + 30) − (доступно + в пути).
+Потребность кластера = отгрузки FBO из кластера за 14 дн ÷ 14 × коэф. сезона × 30 дн от сегодня (доставка внутри, после прихода ≥ 14 дн) − (доступно + в пути).
 Дальше: статусы и стопы → лимит «Моего склада» с выравниванием дней запаса →
 полные моно-короба под каждое направление → пустые кластеры и предупреждения.
 """
@@ -158,7 +158,7 @@ def pick_boxes(qty, sizes, cap):
     """Полные моно-короба под одно направление.
 
     Большими коробами, остаток — самым маленьким коробом, в который он помещается.
-    Вверх — только если итог не больше cap (потолок 30 дней + запас на округление), иначе вниз.
+    Вверх — только если итог не больше cap (потолок горизонта + запас на округление), иначе вниз.
     """
     sizes = sorted({s for _, s in sizes if s > 0}, reverse=True)
     if not sizes or qty <= 0:
@@ -365,7 +365,7 @@ def build(snap, overrides=None):
         st = stock_c.get((offer, cl), zero)
         speed = s14c.get((offer, cl), 0) / config.SALES_DAYS * e["k"]
         lead = config.lead_days(cl)
-        need = max(0, round(speed * (lead + config.TARGET_DAYS) - st["available"] - st["transit"]))
+        need = max(0, round(speed * config.horizon(lead) - st["available"] - st["transit"]))
         lines[(offer, cl)] = Line(
             offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
             sales14=round(s14c.get((offer, cl), 0)), sales30=s30c.get((offer, cl), 0), speed=speed,
@@ -458,7 +458,7 @@ def build(snap, overrides=None):
                                    f"{ff['free']} шт — сюда {ln.qty} из {ln.need}, {where}")
         for ln in group:
             if ln.manual and ln.qty > ln.need + ln.speed * config.ROUND_UP_EXTRA_DAYS and ln.speed:
-                ln.flags.append(f"запас после поставки {(ln.have + ln.qty) / ln.speed - ln.lead:.0f} дн — больше 30")
+                ln.flags.append(f"запас после поставки {(ln.have + ln.qty) / ln.speed - ln.lead:.0f} дн — больше {config.horizon(ln.lead) - ln.lead}")
 
     # --- «Заказать»: потребность кластеров больше, чем можем отгрузить с нашего склада ---
     shipped = defaultdict(int)
@@ -476,7 +476,7 @@ def build(snap, overrides=None):
             o = offer
             sp = s14c.get((o, cl), 0) / config.SALES_DAYS * e["k"]
             st = stock_c.get((o, cl), zero)
-            need += max(0, round(sp * (config.lead_days(cl) + config.TARGET_DAYS) - st["available"] - st["transit"]))
+            need += max(0, round(sp * config.horizon(config.lead_days(cl)) - st["available"] - st["transit"]))
             have += st["available"] + st["transit"]
             speed += sp
         key = _ms_key(offer, snap.unit, ms_by)
@@ -550,7 +550,7 @@ def build(snap, overrides=None):
             if oo != o or not cl:
                 continue
             st = stock_c.get((o, cl), zero)
-            need = round(v / config.SALES_DAYS * (config.lead_days(cl) + config.TARGET_DAYS) - st["available"] - st["transit"])
+            need = round(v / config.SALES_DAYS * config.horizon(config.lead_days(cl)) - st["available"] - st["transit"])
             if need > 0:
                 plan.stopped.setdefault(cl, []).append({"offer": x["offer"], "need": need, "reason": x["reason"]})
     for items in plan.stopped.values():
