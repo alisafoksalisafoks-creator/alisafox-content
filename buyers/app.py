@@ -145,11 +145,13 @@ def names_kb(kind):
     return kb(rows + [[("⬅️ Выкупы всего", f"p:all:{kind}"), ("🏠 Меню", "menu")]])
 
 
-def buyer_total(bid, kind):
-    """Итог одного покупателя за период: штуки, заказы, сумма в заказах и сколько заплатил."""
+def buyer_total(bid, kind, prices=True):
+    """Итог одного покупателя за период: штуки, заказы, сумма в заказах и сколько заплатил.
+    prices=False — без запросов к Ozon: «Заплатил» только по уже скачанным ценам (ответ сразу)."""
     start, end, label = report.period(kind)
     lines = store.buyer_lines(db, [bid], start, end)
-    report.fill_customer_prices(db, oz, lines)
+    if prices:
+        report.fill_customer_prices(db, oz, lines)
     act = report.active(lines)
     qty = sum(x["qty"] for x in act)
     orders = len({x["posting"].rsplit("-", 1)[0] for x in act})
@@ -159,7 +161,7 @@ def buyer_total(bid, kind):
     out = [f"👤 {store.buyer_name(db, bid)} · ID {bid}", label, "",
            f"Купил: {qty} шт.", f"Заказов: {orders}", f"В заказах: {money(total)}"]
     if act:
-        out.append(f"Заплатил: {money(paid)}")
+        out.append(f"Заплатил: {money(paid)}" if paid is not None or prices else "Заплатил: считаю…")
     if canc:
         out.append(f"Отменено: {canc} шт. (в итог не вошло)")
     return "\n".join(out)
@@ -338,9 +340,12 @@ async def button(cb: CallbackQuery):
                              reply_markup=names_kb(d[2:]))
         elif d.startswith("nb:"):
             _, kind, bid = d.split(":")
-            if not fresh():
-                await asyncio.to_thread(ensure_fresh)
-            await msg.answer(await asyncio.to_thread(locked, buyer_total, int(bid), kind), reply_markup=names_kb(kind))
+            # сначала штуки и суммы из базы — сразу; цену покупателя FBO Ozon отдаёт по одному заказу, это дольше
+            first = await asyncio.to_thread(buyer_total, int(bid), kind, False)
+            sent = await msg.answer(first, reply_markup=names_kb(kind) if "считаю" not in first else None)
+            if "считаю" in first:
+                full = await asyncio.to_thread(locked, buyer_total, int(bid), kind)
+                await sent.edit_text(full, reply_markup=names_kb(kind))
         elif d.startswith("v:"):
             _, who, kind, view = d.split(":")
             if state["loading"]:
@@ -457,6 +462,16 @@ async def text(msg: Message):
 
 # --- фон ---
 
+def prefetch_prices():
+    """Цены покупателя FBO для всех из списка за 40 дней — заранее, чтобы «Детали» и «Имена» отвечали сразу."""
+    ids = ids_of("all")
+    if not ids:
+        return
+    t = report.today()
+    with _lock:
+        report.fill_customer_prices(db, oz, store.buyer_lines(db, ids, t - timedelta(days=40), t))
+
+
 def background():
     """Первый запуск — история за 40 дней; дальше каждые 10 минут докачка, в 4:00 — перепроверка отмен."""
     import time
@@ -468,6 +483,7 @@ def background():
                 if not fresh():
                     report.sync(db, oz)
             state["loading"] = False
+            prefetch_prices()
             now = datetime.now(MSK)
             if now.hour >= RECHECK_HOUR and store.get_meta(db, "last_recheck") != now.date().isoformat():
                 with _lock:

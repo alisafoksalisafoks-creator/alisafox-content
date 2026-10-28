@@ -1,5 +1,6 @@
 """Периоды, докачка отправлений и сводки по покупателям."""
 import logging
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
@@ -72,7 +73,9 @@ def recheck(db, oz):
 def fill_customer_prices(db, oz, lines):
     """У FBO цену для покупателя докачиваем по одному отправлению — только для выбранных покупателей."""
     todo = sorted({x["posting"] for x in lines if x["scheme"] == "FBO" and x["customer_price"] is None})
-    for number in todo:
+    for i, number in enumerate(todo):
+        if i:
+            time.sleep(0.3)  # по одному заказу подряд Ozon отвечает 429 — небольшая пауза
         try:
             prices = oz.fbo_customer_prices(number)
         except Exception:
