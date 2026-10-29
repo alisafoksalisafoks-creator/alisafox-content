@@ -734,3 +734,61 @@ def price_png(s, title, name, co7, steps, prefix):
         extra.append(f"Ozon не ответил по {len(s['errors'])} акциям.")
     _save(p, prefix, paths, PRICE_NOTE + ("\n" + " ".join(extra) if extra else ""))
     return paths
+
+
+# Плитки «Общие показатели» как в TrueStats: (название, главное поле, единица, второе поле, его единица, меньше — лучше)
+TS_TILES = [("Чистая прибыль / маржинальность", "profit", "₽", "marginality", "%", False),
+            ("Продажи", "sales", "₽", "totalSales", "шт", False),
+            ("Заказы", "orders", "₽", "ordersCount", "шт", False),
+            ("Процент выкупа", "averageRedemption", "%", None, None, False),
+            ("Реклама / ДРР", "advertisingExpense", "₽", "drr", "%", True),
+            ("Средняя цена продажи", "averagePriceAfterSPP", "₽", None, None, False),
+            ("Возвраты", "returns", "₽", "refunds", "шт", True)]
+TS_GOOD, TS_BAD, TS_FLAT = "#e3efe3", "#f3dede", TILE
+
+
+def _ts_num(v, unit):
+    if v is None:
+        return "—"
+    s = f"{v:,.2f}".replace(",", " ").replace(".", ",") if unit == "%" else num(v)
+    return f"{s} {unit}" if unit != "шт" else f"{s} шт"
+
+
+def truestats_png(cur, prev, title, subtitle, prefix):
+    """Один лист: 7 плиток TrueStats, у каждой — было, разница и % к прошлому периоду, фон — лучше / хуже."""
+    rows = (len(TS_TILES) + 1) // 2
+    th, gy = 1.15, 0.15
+    p = Page(0.35 + 0.78 + rows * (th + gy) + 0.9, SHEET_W)
+    p.header(title, subtitle)
+    w, gx = 0.44, 0.02
+    for i, (name, key, unit, key2, unit2, lower) in enumerate(TS_TILES):
+        if i % 2 == 0:
+            p.y -= th
+        c, b = cur.get(key), prev.get(key) if prev else None
+        d = c - b if c is not None and b is not None else None
+        pct_ = d / abs(b) * 100 if d is not None and b else None
+        flat = d is None or abs(d) < 0.005  # как в TrueStats: любое изменение — цвет
+        good = not flat and ((d < 0) if lower else (d > 0))
+        ax = p.fig.add_axes([0.05 + (i % 2) * (w + gx), p.y / p.h, w, th / p.h])
+        ax.set_facecolor(TS_FLAT if flat else TS_GOOD if good else TS_BAD)
+        ax.set_xticks([]), ax.set_yticks([])
+        for s in ax.spines.values():
+            s.set_visible(False)
+        ax.text(0.05, 0.80, name, fontsize=8.5, color=INK2, transform=ax.transAxes, va="center")
+        main = _ts_num(c, unit) + (f" / {_ts_num(cur.get(key2), unit2)}" if key2 else "")
+        ax.text(0.05, 0.50, main, fontsize=12.5, fontweight="bold", color=INK, transform=ax.transAxes, va="center")
+        if d is None:
+            sub, col = "нет данных за прошлый период", MUTED
+        else:
+            arrow = "≈" if flat else "▲" if d > 0 else "▼"
+            ds = f"{d:+,.2f}".replace(",", " ").replace(".", ",") if unit == "%" else f"{d:+,.0f}".replace(",", " ")
+            sub = (f"было {_ts_num(b, unit)}  {arrow} {ds}" + (f" ({pct_:+.2f}%)".replace(".", ",") if pct_ is not None else "")
+                   ).replace("-", "−")
+            col = MUTED if flat else GOOD if good else BAD
+        ax.text(0.05, 0.18, sub, fontsize=8, color=col, fontweight="bold", transform=ax.transAxes, va="center")
+        if i % 2 == 1 or i == len(TS_TILES) - 1:
+            p.y -= gy
+    paths = []
+    _save(p, prefix, paths, "Источник: TrueStats, «Общие показатели» оцифровки (все подключённые кабинеты).\n"
+          "Зелёный — лучше, красный — хуже прошлого периода; для рекламы и возвратов лучше — меньше.")
+    return paths

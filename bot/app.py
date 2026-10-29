@@ -24,7 +24,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
 from bot import cards, coinvest, dashboard, keywords, morning, positions, prices, profit, restock, signals, store
 from bot.category_report import MSK
-from bot.sources import gsheet_costs
+from bot.sources import gsheet_costs, truestats
 from bot.sources.moysklad import Catalog, is_test
 from bot.sources.ozon import OzonClient
 from bot.sources.performance import PerformanceClient
@@ -64,7 +64,9 @@ MENU = kb([[("📊 Сводка за вчера", "morning")],
            [("📦 Категории", "cats"), ("🔎 Артикул", "ask_sku")],
            [("🚦 Сигналы по остаткам", "sig")],
            [("📍 Позиции", "pos"), ("🔑 Ключи", "kw")],
-           [("📉 Минусовые артикулы", "neg"), ("🤝 Соинвест", "co")]])
+           [("📉 Минусовые артикулы", "neg"), ("🤝 Соинвест", "co")],
+           [("📈 TrueStats", "ts")]])
+TS_MENU = kb([[("Вчера", "ts:y"), ("Неделя", "ts:w")], [("📅 Свой период", "ts:p")], [("⬅️ Меню", "menu")]])
 KW_MENU = kb([[("📂 Категория", "kw:c"), ("🔎 Артикул", "kw:a")], [("⬅️ Меню", "menu")]])
 SIGNALS_MENU = kb([[("⏰ Пора отгрузить", "sig:s")], [("🔀 Пересорт", "sig:x")],
                    [("💸 Платное хранение", "sig:p")], [("🔎 По артикулу", "sig:a")], [("⬅️ Меню", "menu")]])
@@ -558,8 +560,45 @@ async def price_card(msg: Message, sku):
                    caption, kb([[("⬅️ Артикул", f"p:s:{sku}:week"), ("⬅️ Меню", "menu")]]))
 
 
+def ts_periods(k, start=None, end=None):
+    """Вчера к позавчера, 7 дней к прошлым 7 или свой период к такому же по длине перед ним."""
+    if k == "y":
+        end = start = yesterday()
+    elif k == "w":
+        end = yesterday()
+        start = end - timedelta(days=6)
+    n = (end - start).days + 1
+    return start, end, start - timedelta(days=n), start - timedelta(days=1)
+
+
+def ts_label(start, end):
+    return f"{start:%d.%m}" if start == end else f"{start:%d.%m}–{end:%d.%m}"
+
+
+def render_truestats(prefix, k, start=None, end=None):
+    a, b, pa, pb = ts_periods(k, start, end)
+    cur, prev = truestats.stats(a, b), truestats.stats(pa, pb)
+    name = {"y": "вчера", "w": "неделя"}.get(k, "период")
+    return dashboard.truestats_png(cur, prev, f"TrueStats · {name}", f"{ts_label(a, b)} к {ts_label(pa, pb)}", prefix)
+
+
+async def truestats_card(msg: Message, k, start=None, end=None):
+    if not truestats.token():
+        return await msg.answer("Нет ключа TrueStats на сервере: добавьте TRUESTATS_TOKEN в .env бота.", reply_markup=MENU)
+    await msg.answer("Беру данные из TrueStats…")
+    a, b, pa, pb = ts_periods(k, start, end)
+    await send_png(msg, lambda p: render_truestats(p, k, start, end),
+                   f"TrueStats: {ts_label(a, b)} к {ts_label(pa, pb)}", TS_MENU)
+
+
 def render_morning(prefix):
-    return dashboard.morning_png(morning.build(db, oz, data_day()), prefix)
+    paths = dashboard.morning_png(morning.build(db, oz, data_day()), prefix)
+    if truestats.token():
+        try:  # лист TrueStats: вчера к позавчера; сбой TrueStats не должен ронять сводку
+            paths += render_truestats(f"{prefix}_ts", "y")
+        except Exception as e:  # noqa: BLE001
+            log.warning("TrueStats в сводке: %r", e)
+    return paths
 
 
 async def push_morning(bot: Bot, chats):
@@ -667,6 +706,14 @@ async def on_button(cb: CallbackQuery):
         await card(msg, f"{t}:{key}", kind)
     elif d == "pos" or d.startswith("pos:"):
         await pos_button(msg, cb.from_user.id, d)
+    elif d == "ts":
+        await msg.answer("TrueStats — общие показатели, как на экране оцифровки. За какой период?", reply_markup=TS_MENU)
+    elif d in ("ts:y", "ts:w"):
+        await truestats_card(msg, d[3])
+    elif d == "ts:p":
+        waiting[cb.from_user.id] = "ts"
+        await msg.answer(f"Пришлите период, например 01.10-28.10 (данные есть по {yesterday():%d.%m}). "
+                         "Сравню с таким же периодом перед ним.")
     elif d.startswith("pr:"):
         await price_card(msg, d[3:])
     elif d.startswith("r:"):
@@ -854,6 +901,12 @@ async def on_text(msg: Message):
         await msg.answer(f"Добавлен: {name}. Пусть нажмёт /start в боте.", reply_markup=users_kb())
         return
     mode = waiting.get(msg.from_user.id, "")
+    if mode == "ts":
+        period = parse_period(msg.text, yesterday())
+        if not period:
+            return await msg.answer(f"Не поняла период. Формат: 01.10-28.10 (данные есть по {yesterday():%d.%m}).")
+        waiting.pop(msg.from_user.id)
+        return await truestats_card(msg, "p", *period)
     if mode.startswith("posx:"):
         last = await pos_day(msg)
         period = parse_period(msg.text, last)
