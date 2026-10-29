@@ -100,18 +100,21 @@ def build(db, oz, day: date):
     spend = sum(g["spend"] for g in ads.values())
     spend_prev = sum(g["spend"] for g in ads_prev.values())
 
+    from bot import stockfilter
     turn = [x for x in turnover(oz) if not moysklad.is_test(x.get("offer_id"))]
-    ending = sorted([x for x in turn if x["ads"] >= 0.5 and x["idc"] < 20], key=lambda x: -x["ads"])
-    excess = sorted([x for x in turn if x["turnover_grade"] in ("GRADES_RED", "GRADES_CRITICAL") and x["current_stock"] > 0],
+    # без остатка на FBO (< 1 шт) — не в списках и не в сигналах (владелец 2026-10-29); turn целиком — для сигналов
+    shown = [x for x in turn if not stockfilter.no_fbo(oz, x.get("sku"), x.get("offer_id"))]
+    ending = sorted([x for x in shown if x["ads"] >= 0.5 and x["idc"] < 20], key=lambda x: -x["ads"])
+    excess = sorted([x for x in shown if x["turnover_grade"] in ("GRADES_RED", "GRADES_CRITICAL") and x["current_stock"] > 0],
                     key=lambda x: -x["current_stock"])
-    soon = [x for x in turn if x["turnover_grade"] == "GRADES_YELLOW" and x["current_stock"] > 0]
+    soon = [x for x in shown if x["turnover_grade"] == "GRADES_YELLOW" and x["current_stock"] > 0]
 
     top = [r[0] for r in db.execute(
         "select sku from daily where day >= ? group by sku order by sum(revenue) desc limit 300",
         (str(day - timedelta(days=29)),))]
     rating_drops = content_ratings(db, oz, day, top)
     if rating_drops:
-        rating_drops = [r for r in rating_drops if not moysklad.is_test(r["offer_id"])]
+        rating_drops = [r for r in rating_drops if not moysklad.is_test(r["offer_id"]) and not stockfilter.no_fbo(oz, r["sku"])]
 
     # себестоимость проданного: доставленные минус возвраты за день × себестоимость из МоегоСклада
     ms = moysklad.Catalog()
@@ -147,6 +150,7 @@ def build(db, oz, day: date):
         skus = [r[0] for r in db.execute("select sku from daily where day >= ? group by sku having sum(ordered_units) > 0",
                                          (str(day - timedelta(days=29)),))]
         _, sig = signals.build(db, restock.cluster_stocks(oz, skus), day, turnover=turn, catalog=ms)
+        sig = {k: v for k, v in sig.items() if not stockfilter.no_fbo(oz, k)}
         for k, v in sig.items():
             v["profit"] = (profits.get(k) or {}).get("profit")
         ship, resort = signals.to_ship(sig), signals.resort(sig)

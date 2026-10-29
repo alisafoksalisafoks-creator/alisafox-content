@@ -22,7 +22,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
                            Message)
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from bot import cards, coinvest, dashboard, keywords, morning, positions, prices, profit, restock, signals, store
+from bot import cards, coinvest, dashboard, keywords, morning, positions, prices, profit, restock, signals, stockfilter, store
 from bot.category_report import MSK
 from bot.sources import gsheet_costs, truestats
 from bot.sources.moysklad import Catalog, is_test
@@ -165,7 +165,7 @@ async def card(msg: Message, target, kind="week", compare=None):
             log.warning("остатки для кнопок: %r", e)
             fbo = {}
         items = [r for r in store.top_skus(db, data_day() - timedelta(days=29), data_day(), key, 200)
-                 if not is_test(r["offer_id"]) and (not fbo or fbo.get(str(r["sku"]), {}).get("fbo", 0) >= 1)][:30]
+                 if not is_test(r["offer_id"]) and not (fbo and fbo.get(str(r["sku"]), {}).get("fbo", 0) < 1)][:30]
         buttons = [(dashboard.short(r["offer_id"] or r["sku"], 18)
                     + (f" · {fbo.get(str(r['sku']), {}).get('fbo', 0)} шт" if fbo else ""), f"p:s:{r['sku']}:week")
                    for r in items]
@@ -209,6 +209,7 @@ def build_signals():
     except Exception:
         log.exception("прибыль по артикулам не посчиталась")
         profits = {}
+    by = {k: v for k, v in by.items() if not stockfilter.no_fbo(oz, k)}
     for k, v in by.items():
         v["profit"] = (profits.get(k) or {}).get("profit")
     return by
@@ -286,7 +287,7 @@ def build_losses():
         if x["profit"] >= 0:
             continue
         s = db.execute("select * from sku where sku = ?", (sku,)).fetchone()
-        if is_test(x["offer_id"] or (s["offer_id"] if s else "")):
+        if is_test(x["offer_id"] or (s["offer_id"] if s else "")) or stockfilter.no_fbo(oz, sku):
             continue
         x.update(sku=sku, name=s["name"] if s else "", offer_id=x["offer_id"] or (s["offer_id"] if s else None))
         tid, tname = (s["type_id"], s["type_name"]) if s else ("", "Без категории")
@@ -351,7 +352,9 @@ def kw_sku_back(sku):
 
 async def kw_articles(msg: Message, type_id):
     end = data_day()
-    items = [r for r in store.top_skus(db, end - timedelta(days=27), end, type_id, 60) if not is_test(r["offer_id"])][:40]
+    await asyncio.to_thread(stockfilter.load, oz)
+    items = [r for r in store.top_skus(db, end - timedelta(days=27), end, type_id, 120)
+             if not is_test(r["offer_id"]) and not stockfilter.no_fbo(oz, r["sku"])][:40]
     name = db.execute("select type_name from sku where type_id = ? limit 1", (type_id,)).fetchone()[0]
     rows = [[(f"{(r['offer_id'] or r['sku'])[:16]} · {dashboard.short(r['name'] or '', 18)}", f"kw:sd:{r['sku']}")]
             for r in items]
@@ -497,7 +500,8 @@ async def coinvest_categories(msg: Message, k):
 async def coinvest_category(msg: Message, k, type_id):
     end = await coinvest_end(msg)
     period = COINVEST_PERIODS[k]
-    rows = coinvest.table(db, end, "sku", type_id, period=period)
+    await asyncio.to_thread(stockfilter.load, oz)
+    rows = [r for r in coinvest.table(db, end, "sku", type_id, period=period) if not stockfilter.no_fbo(oz, r["key"])]
     name = db.execute("select type_name from sku where type_id = ? limit 1", (type_id,)).fetchone()
     title = dashboard.short(name[0] if name else "Категория", 30)
     await send_png(msg, lambda p: dashboard.coinvest_png(title, coinvest_sub(end, k), rows, period, p, by="sku"),
@@ -734,6 +738,8 @@ async def pos_items(msg: Message, target):
     """target: n — новинки (Супер), c<type_id> — категория, s<sku> — один артикул. → (название, артикулы)."""
     if target.startswith("n"):  # n — все новинки, n<type_id> — новинки одной категории
         items = await asyncio.to_thread(positions.super_skus, oz)
+        await asyncio.to_thread(stockfilter.load, oz)
+        items = [x for x in items if not stockfilter.no_fbo(oz, x["sku"])]
         if target == "n":
             return "Новинки (Супер)", items
         row = db.execute("select type_name from sku where type_id = ? limit 1", (target[1:],)).fetchone()
@@ -741,9 +747,10 @@ async def pos_items(msg: Message, target):
     if target.startswith("c"):
         tid = target[1:]
         row = db.execute("select type_name from sku where type_id = ? limit 1", (tid,)).fetchone()
-        rows = store.top_skus(db, data_day() - timedelta(days=29), data_day(), tid, 50)
+        rows = store.top_skus(db, data_day() - timedelta(days=29), data_day(), tid, 120)
+        await asyncio.to_thread(stockfilter.load, oz)
         items = [{"sku": r["sku"], "offer_id": r["offer_id"], "name": r["name"]} for r in rows
-                 if not is_test(r["offer_id"])][:40]
+                 if not is_test(r["offer_id"]) and not stockfilter.no_fbo(oz, r["sku"])][:40]
         return (row[0] if row else "Категория"), items
     s = store.find_sku(db, target[1:])
     return (s["offer_id"] or s["sku"]) if s else target[1:], [dict(s)] if s else [{"sku": target[1:]}]
@@ -919,6 +926,11 @@ async def on_text(msg: Message):
     s = store.find_sku(db, msg.text)
     if not s:
         return await msg.answer("Не нашёл такой артикул в продажах за 120 дней. Проверьте код.", reply_markup=MENU)
+    await asyncio.to_thread(stockfilter.load, oz)
+    if stockfilter.no_fbo(oz, s["sku"]):
+        waiting.pop(msg.from_user.id, None)
+        return await msg.answer(f"У {s['offer_id'] or s['sku']} на FBO меньше 1 шт — такие артикулы бот не показывает.",
+                                reply_markup=MENU)
     mode = waiting.pop(msg.from_user.id, "card")
     if mode.startswith("co:"):
         return await coinvest_sku(msg, mode[3], s["sku"])
