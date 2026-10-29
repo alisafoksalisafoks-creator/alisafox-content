@@ -156,10 +156,17 @@ async def card(msg: Message, target, kind="week", compare=None):
         caption += f"\nСильнее всего просел этап «{worst['name']}»: {worst['delta_conv']:+.0f}% к конверсии."
     markup = period_kb(target, kind)
     if t == "c":  # из категории — в артикул: там «💰 Цены» и «🚦 Сигналы»
-        caption += "\nНажмите на артикул — откроется его карточка с кнопкой «💰 Цены»."
+        caption += "\nНажмите на артикул — откроется его карточка с кнопкой «💰 Цены». Рядом — остаток FBO."
         items = [r for r in store.top_skus(db, data_day() - timedelta(days=29), data_day(), key, 60)
                  if not is_test(r["offer_id"])][:30]
-        buttons = [(dashboard.short(r["offer_id"] or r["sku"], 22), f"p:s:{r['sku']}:week") for r in items]
+        try:
+            fbo = await asyncio.to_thread(oz.stocks)
+        except Exception as e:  # noqa: BLE001 — без остатков кнопки всё равно нужны
+            log.warning("остатки для кнопок: %r", e)
+            fbo = {}
+        buttons = [(dashboard.short(r["offer_id"] or r["sku"], 18)
+                    + (f" · {fbo.get(str(r['sku']), {}).get('fbo', 0)} шт" if fbo else ""), f"p:s:{r['sku']}:week")
+                   for r in items]
         markup = kb([buttons[i:i + 2] for i in range(0, len(buttons), 2)]
                     + [[(b.text, b.callback_data) for b in row] for row in markup.inline_keyboard])
     await send_png(msg, render, caption, markup)
