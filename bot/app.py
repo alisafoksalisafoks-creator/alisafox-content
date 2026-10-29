@@ -22,7 +22,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
                            Message)
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from bot import cards, coinvest, dashboard, greetings, keywords, morning, positions, prices, profit, restock, signals, stockfilter, store
+from bot import cards, coinvest, daily_extras, dashboard, greetings, keywords, morning, positions, prices, profit, restock, signals, stockfilter, store
 from bot.category_report import MSK
 from bot.sources import gsheet_costs, truestats
 from bot.sources.moysklad import Catalog, is_test
@@ -65,7 +65,7 @@ MENU = kb([[("📊 Сводка за вчера", "morning")],
            [("🚦 Сигналы по остаткам", "sig")],
            [("📍 Позиции", "pos"), ("🔑 Ключи", "kw")],
            [("📉 Минусовые артикулы", "neg"), ("🤝 Соинвест", "co")],
-           [("📈 TrueStats", "ts")]])
+           [("📈 TrueStats", "ts"), ("🌤 Погода и гороскоп", "me")]])
 TS_MENU = kb([[("Вчера", "ts:y"), ("Неделя", "ts:w")], [("📅 Свой период", "ts:p")], [("⬅️ Меню", "menu")]])
 KW_MENU = kb([[("📂 Категория", "kw:c"), ("🔎 Артикул", "kw:a")], [("⬅️ Меню", "menu")]])
 SIGNALS_MENU = kb([[("⏰ Пора отгрузить", "sig:s")], [("🔀 Пересорт", "sig:x")],
@@ -623,6 +623,31 @@ async def push_morning(bot: Bot, chats, hello=False):
     if hello:
         await greet(bot, chats)
     await send_sheets(bot, chats, render_morning, f"Утренняя сводка Ozon за {data_day():%d.%m.%Y}", MENU)
+    if hello:
+        await push_extras(bot, chats)
+
+
+def me_kb(p):
+    return kb([[("🏙 Город" + (f": {p['city']}" if p and p["city"] else ""), "me:city")],
+               [("Знак: " + (daily_extras.SIGN_NAME[p["sign"]] if p and p["sign"] else "не выбран"), "me:sign")],
+               [("👀 Показать на сегодня", "me:show")], [("⬅️ Меню", "menu")]])
+
+
+async def push_extras(bot: Bot, chats):
+    """После утренней сводки: каждому — погода в его городе и гороскоп по его знаку."""
+    today = datetime.now(MSK).date()
+    for chat in chats:
+        try:
+            p = daily_extras.get(db, chat)
+            text = await asyncio.to_thread(daily_extras.message, p, today)
+            if text:
+                await bot.send_message(chat, text)
+            elif not p or not p["asked"]:  # один раз предлагаем указать город и знак
+                daily_extras.save(db, chat, asked=1)
+                await bot.send_message(chat, "Хотите утром получать погоду в вашем городе и гороскоп? "
+                                             "Укажите город и знак зодиака:", reply_markup=me_kb(p))
+        except Exception as e:  # noqa: BLE001 — одному не дошло, остальным шлём
+            log.warning("погода и гороскоп %s: %r", chat, e)
 
 
 async def morning_card(msg: Message):
@@ -726,6 +751,23 @@ async def on_button(cb: CallbackQuery):
         await card(msg, f"{t}:{key}", kind)
     elif d == "pos" or d.startswith("pos:"):
         await pos_button(msg, cb.from_user.id, d)
+    elif d == "me":
+        await msg.answer("Утром после сводки пришлю погоду в вашем городе и гороскоп на день.",
+                         reply_markup=me_kb(daily_extras.get(db, cb.from_user.id)))
+    elif d == "me:city":
+        waiting[cb.from_user.id] = "city"
+        await msg.answer("Напишите ваш город, например: Казань.")
+    elif d == "me:sign":
+        signs = daily_extras.SIGNS
+        await msg.answer("Ваш знак зодиака:", reply_markup=kb(
+            [[(n, f"me:z:{k}") for k, n in signs[i:i + 3]] for i in range(0, 12, 3)] + [[("⬅️ Назад", "me")]]))
+    elif d.startswith("me:z:"):
+        daily_extras.save(db, cb.from_user.id, sign=d[5:])
+        await msg.answer(f"Запомнила: {daily_extras.SIGN_NAME[d[5:]]}.", reply_markup=me_kb(daily_extras.get(db, cb.from_user.id)))
+    elif d == "me:show":
+        p = daily_extras.get(db, cb.from_user.id)
+        text = await asyncio.to_thread(daily_extras.message, p, datetime.now(MSK).date())
+        await msg.answer(text or "Сначала укажите город и знак зодиака.", reply_markup=me_kb(p))
     elif d == "ts":
         await msg.answer("TrueStats — общие показатели, как на экране оцифровки. За какой период?", reply_markup=TS_MENU)
     elif d in ("ts:y", "ts:w"):
@@ -924,6 +966,18 @@ async def on_text(msg: Message):
         await msg.answer(f"Добавлен: {name}. Пусть нажмёт /start в боте.", reply_markup=users_kb())
         return
     mode = waiting.get(msg.from_user.id, "")
+    if mode == "city":
+        try:
+            found = await asyncio.to_thread(daily_extras.find_city, msg.text or "")
+        except Exception as e:  # noqa: BLE001
+            log.warning("поиск города: %r", e)
+            return await msg.answer("Сервис погоды сейчас не отвечает, попробуйте чуть позже.")
+        if not found:
+            return await msg.answer("Не нашла такой город. Напишите по-другому, например: Санкт-Петербург.")
+        waiting.pop(msg.from_user.id)
+        city, lat, lon, tz = found
+        daily_extras.save(db, msg.from_user.id, city=city, lat=lat, lon=lon, tz=tz)
+        return await msg.answer(f"Запомнила город: {city}.", reply_markup=me_kb(daily_extras.get(db, msg.from_user.id)))
     if mode == "ts":
         period = parse_period(msg.text, yesterday())
         if not period:
