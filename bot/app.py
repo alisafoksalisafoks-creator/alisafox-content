@@ -154,7 +154,15 @@ async def card(msg: Message, target, kind="week", compare=None):
     caption = f"{name}\n{data['label']}"
     if worst:
         caption += f"\nСильнее всего просел этап «{worst['name']}»: {worst['delta_conv']:+.0f}% к конверсии."
-    await send_png(msg, render, caption, period_kb(target, kind))
+    markup = period_kb(target, kind)
+    if t == "c":  # из категории — в артикул: там «💰 Цены» и «🚦 Сигналы»
+        caption += "\nНажмите на артикул — откроется его карточка с кнопкой «💰 Цены»."
+        items = [r for r in store.top_skus(db, data_day() - timedelta(days=29), data_day(), key, 60)
+                 if not is_test(r["offer_id"])][:30]
+        buttons = [(dashboard.short(r["offer_id"] or r["sku"], 22), f"p:s:{r['sku']}:week") for r in items]
+        markup = kb([buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+                    + [[(b.text, b.callback_data) for b in row] for row in markup.inline_keyboard])
+    await send_png(msg, render, caption, markup)
 
 
 def top_rows(type_id, period, limit=8):
