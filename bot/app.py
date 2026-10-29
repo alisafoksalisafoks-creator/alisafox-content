@@ -22,7 +22,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
                            Message)
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from bot import cards, coinvest, dashboard, keywords, morning, positions, prices, profit, restock, signals, stockfilter, store
+from bot import cards, coinvest, dashboard, greetings, keywords, morning, positions, prices, profit, restock, signals, stockfilter, store
 from bot.category_report import MSK
 from bot.sources import gsheet_costs, truestats
 from bot.sources.moysklad import Catalog, is_test
@@ -607,7 +607,21 @@ def render_morning(prefix):
     return paths
 
 
-async def push_morning(bot: Bot, chats):
+async def greet(bot: Bot, chats):
+    """Утром — обращение по имени (имя из Telegram, иначе из списка пользователей) и пожелание на день."""
+    names = users()
+    for chat in chats:
+        try:
+            ch = await bot.get_chat(chat)
+            name = ch.first_name or ch.title or (names.get(chat) or "").split(" (@")[0].split(" ")[0]
+            await bot.send_message(chat, greetings.text(name, datetime.now(MSK).date(), chat))
+        except Exception as e:  # noqa: BLE001 — приветствие не должно мешать отчёту
+            log.warning("приветствие %s: %r", chat, e)
+
+
+async def push_morning(bot: Bot, chats, hello=False):
+    if hello:
+        await greet(bot, chats)
     await send_sheets(bot, chats, render_morning, f"Утренняя сводка Ozon за {data_day():%d.%m.%Y}", MENU)
 
 
@@ -617,7 +631,7 @@ async def morning_card(msg: Message):
 
 
 async def send_morning(bot: Bot):
-    await push_morning(bot, recipients())
+    await push_morning(bot, recipients(), hello=True)
 
 
 @dp.message(CommandStart())
