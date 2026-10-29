@@ -498,7 +498,8 @@ async def coinvest_sku(msg: Message, k, sku):
                                 reply_markup=kb([[("⬅️ Соинвест", f"co:p:{k}"), ("⬅️ Меню", "menu")]]))
     await send_png(msg, lambda p: dashboard.coinvest_sku_png(r, period, coinvest.daily(db, sku, end), p),
                    f"Соинвест: {r['offer_id'] or sku} · {period.lower()}",
-                   kb([[("⬅️ Категория", f"co:{k}:c:{tid[0]}" if tid else f"co:p:{k}"), ("⬅️ Меню", "menu")]]))
+                   kb([[("💰 Цены", f"pr:{sku}")],
+                       [("⬅️ Категория", f"co:{k}:c:{tid[0]}" if tid else f"co:p:{k}"), ("⬅️ Меню", "menu")]]))
 
 
 async def price_card(msg: Message, sku):
