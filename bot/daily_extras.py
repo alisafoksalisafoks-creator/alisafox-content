@@ -45,13 +45,20 @@ def save(db, uid, **kw):
 
 
 def find_city(name):
-    """«Казань» → (Казань, широта, долгота, часовой пояс) или None."""
+    """«Казань» или «Новопавловка, Ростовская» (посёлок — с областью) → (название, широта, долгота, пояс) или None."""
+    place, _, region = name.partition(",")
     r = httpx.get("https://geocoding-api.open-meteo.com/v1/search",
-                  params={"name": name.strip(), "count": 1, "language": "ru"}, timeout=20)
+                  params={"name": place.strip(), "count": 20, "language": "ru"}, timeout=20)
     r.raise_for_status()
-    res = (r.json().get("results") or [None])[0]
-    if not res:
+    found = r.json().get("results") or []
+    if region.strip():
+        key = region.strip().lower()[:6]  # «Ростовская обл» → «ростов»
+        found = [x for x in found if key in " ".join(str(x.get(k, "")) for k in ("admin1", "admin2")).lower()]
+    else:
+        found = [x for x in found if x.get("country_code") == "RU"] or found
+    if not found:
         return None
+    res = found[0]
     return res["name"], res["latitude"], res["longitude"], res.get("timezone") or "Europe/Moscow"
 
 
