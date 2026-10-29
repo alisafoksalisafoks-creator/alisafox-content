@@ -106,7 +106,8 @@ def is_admin(user_id):
 
 def menu_for(user_id):
     rows = [[(b.text, b.callback_data) for b in r] for r in MENU.inline_keyboard]
-    return kb(rows + [[("👥 Пользователи", "u")]]) if is_admin(user_id) else MENU
+    rows.append([("🔔 Вернуть пожелания" if daily_extras.opted_out(db, user_id) else "🔕 Отменить пожелания", "wish")])
+    return kb(rows + ([[("👥 Пользователи", "u")]] if is_admin(user_id) else []))
 
 
 def add_user(uid, name):
@@ -611,6 +612,8 @@ async def greet(bot: Bot, chats):
     """Утром — обращение по имени (имя из Telegram, иначе из списка пользователей) и пожелание на день."""
     names = users()
     for chat in chats:
+        if daily_extras.opted_out(db, chat):
+            continue
         try:
             ch = await bot.get_chat(chat)
             name = ch.first_name or ch.title or (names.get(chat) or "").split(" (@")[0].split(" ")[0]
@@ -637,6 +640,8 @@ async def push_extras(bot: Bot, chats):
     except Exception as e:  # noqa: BLE001
         log.warning("people.txt: %r", e)
     for chat in chats:
+        if daily_extras.opted_out(db, chat):
+            continue
         try:
             p = daily_extras.get(db, chat)
             text = await asyncio.to_thread(daily_extras.message, p, today)
@@ -747,6 +752,11 @@ async def on_button(cb: CallbackQuery):
         await card(msg, f"{t}:{key}", kind)
     elif d == "pos" or d.startswith("pos:"):
         await pos_button(msg, cb.from_user.id, d)
+    elif d == "wish":  # утреннее приветствие, погода и гороскоп: человек сам отключает и включает
+        off = not daily_extras.opted_out(db, cb.from_user.id)
+        daily_extras.save(db, cb.from_user.id, optout=int(off))
+        await msg.answer("Утренние пожелания отключены. Сводка будет приходить как обычно." if off
+                         else "Утренние пожелания снова включены 🦊", reply_markup=menu_for(cb.from_user.id))
     elif d == "ts":
         await msg.answer("TrueStats — общие показатели, как на экране оцифровки. За какой период?", reply_markup=TS_MENU)
     elif d in ("ts:y", "ts:w"):

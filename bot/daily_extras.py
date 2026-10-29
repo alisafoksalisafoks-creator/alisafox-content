@@ -26,8 +26,11 @@ WMO = {0: "☀️ ясно", 1: "🌤 малооблачно", 2: "⛅ пере�
 def ensure(db):
     db.execute("create table if not exists profile (id integer primary key, city text, lat real, lon real, tz text, "
                "sign text, asked integer default 0)")
-    if "city_src" not in [r[1] for r in db.execute("pragma table_info(profile)")]:
+    cols = [r[1] for r in db.execute("pragma table_info(profile)")]
+    if "city_src" not in cols:
         db.execute("alter table profile add column city_src text")
+    if "optout" not in cols:  # 1 — человек сам отключил утренние пожелания кнопкой
+        db.execute("alter table profile add column optout integer default 0")
     db.commit()
 
 
@@ -42,6 +45,11 @@ def save(db, uid, **kw):
     for k, v in kw.items():
         db.execute(f"update profile set {k} = ? where id = ?", (v, uid))
     db.commit()
+
+
+def opted_out(db, uid):
+    p = get(db, uid)
+    return bool(p and p["optout"])
 
 
 def find_city(name):
