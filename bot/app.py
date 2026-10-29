@@ -159,13 +159,13 @@ async def card(msg: Message, target, kind="week", compare=None):
     markup = period_kb(target, kind)
     if t == "c":  # из категории — в артикул: там «💰 Цены» и «🚦 Сигналы»
         caption += "\nНажмите на артикул — откроется его карточка с кнопкой «💰 Цены». Рядом — остаток FBO."
-        items = [r for r in store.top_skus(db, data_day() - timedelta(days=29), data_day(), key, 60)
-                 if not is_test(r["offer_id"])][:30]
         try:
             fbo = await asyncio.to_thread(oz.stocks)
         except Exception as e:  # noqa: BLE001 — без остатков кнопки всё равно нужны
             log.warning("остатки для кнопок: %r", e)
             fbo = {}
+        items = [r for r in store.top_skus(db, data_day() - timedelta(days=29), data_day(), key, 200)
+                 if not is_test(r["offer_id"]) and (not fbo or fbo.get(str(r["sku"]), {}).get("fbo", 0) >= 1)][:30]
         buttons = [(dashboard.short(r["offer_id"] or r["sku"], 18)
                     + (f" · {fbo.get(str(r['sku']), {}).get('fbo', 0)} шт" if fbo else ""), f"p:s:{r['sku']}:week")
                    for r in items]
@@ -178,9 +178,11 @@ def top_rows(type_id, period, limit=8):
     stocks = oz.stocks()
     n = (period[1] - period[0]).days + 1
     rows = []
-    for r in store.top_skus(db, *period, type_id, limit + 5):
+    for r in store.top_skus(db, *period, type_id, limit + 40):
         if is_test(r["offer_id"]) or len(rows) >= limit:
             continue
+        if stocks and stocks.get(str(r["sku"]), {}).get("fbo", 0) < 1:
+            continue  # без остатка на FBO в топ не берём (владелец 2026-10-29)
         prev = store.totals(db, period[0] - timedelta(days=n), period[1] - timedelta(days=n), sku=r["sku"])
         lab, col = dashboard.delta_style(cards.change(r["units"], prev["ordered_units"]))
         speed = store.totals(db, period[1] - timedelta(days=13), period[1], sku=r["sku"])["ordered_units"] / 14
