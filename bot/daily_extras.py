@@ -1,7 +1,7 @@
 """Утром после сводки: погода в городе пользователя и гороскоп по его знаку на сегодня.
 
 Погода — Open-Meteo (бесплатно, без ключа), гороскоп — ежедневный XML ignio.com (по-русски, без ключа).
-Город и знак каждый пользователь задаёт сам кнопкой «🌤 Погода и гороскоп».
+Город и дату рождения задаёт владелец: «👥 Пользователи» → 🎁 (сюрприз для пользователя).
 """
 import logging
 import re
@@ -100,3 +100,33 @@ def message(p, day):
         except Exception as e:  # noqa: BLE001
             log.warning("гороскоп: %r", e)
     return "\n\n".join(parts) or None
+
+
+# начало знака: (месяц, день) — знак действует с этой даты до начала следующего
+_STARTS = [((1, 20), "aquarius"), ((2, 19), "pisces"), ((3, 21), "aries"), ((4, 20), "taurus"), ((5, 21), "gemini"),
+           ((6, 21), "cancer"), ((7, 23), "leo"), ((8, 23), "virgo"), ((9, 23), "libra"), ((10, 23), "scorpio"),
+           ((11, 22), "sagittarius"), ((12, 22), "capricorn")]
+
+
+def sign_of(day, month):
+    """Знак зодиака по дню и месяцу рождения."""
+    sign = "capricorn"  # 1–19 января
+    for start, s in _STARTS:
+        if (month, day) >= start:
+            sign = s
+    return sign
+
+
+def parse_gift(text):
+    """«Казань 12.05» / «Казань, 12.05.1990» → (город, день, месяц) или None."""
+    m = re.match(r"\s*(.+?)[,\s]+(\d{1,2})\.(\d{1,2})(?:\.\d{2,4})?\s*$", text or "")
+    if not m:
+        return None
+    d, mo = int(m.group(2)), int(m.group(3))
+    return (m.group(1).strip(), d, mo) if 1 <= mo <= 12 and 1 <= d <= 31 else None
+
+
+def describe(p):
+    if not p or (p["city"] is None and p["sign"] is None):
+        return "не задано"
+    return f"{p['city'] or 'город не задан'}, {SIGN_NAME.get(p['sign'], 'знак не задан')}"

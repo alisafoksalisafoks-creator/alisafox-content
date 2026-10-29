@@ -65,7 +65,7 @@ MENU = kb([[("📊 Сводка за вчера", "morning")],
            [("🚦 Сигналы по остаткам", "sig")],
            [("📍 Позиции", "pos"), ("🔑 Ключи", "kw")],
            [("📉 Минусовые артикулы", "neg"), ("🤝 Соинвест", "co")],
-           [("📈 TrueStats", "ts"), ("🌤 Погода и гороскоп", "me")]])
+           [("📈 TrueStats", "ts")]])
 TS_MENU = kb([[("Вчера", "ts:y"), ("Неделя", "ts:w")], [("📅 Свой период", "ts:p")], [("⬅️ Меню", "menu")]])
 KW_MENU = kb([[("📂 Категория", "kw:c"), ("🔎 Артикул", "kw:a")], [("⬅️ Меню", "menu")]])
 SIGNALS_MENU = kb([[("⏰ Пора отгрузить", "sig:s")], [("🔀 Пересорт", "sig:x")],
@@ -115,7 +115,10 @@ def add_user(uid, name):
 
 
 def users_kb():
-    rows = [[(f"❌ {name or uid}", f"u:del:{uid}")] for uid, name in users().items()]
+    """🎁 — город и дата рождения для утренней погоды и гороскопа (сюрприз от владельца), ❌ — закрыть доступ."""
+    rows = [[("🎁 Вы (владелец)", f"u:gift:{a}")] for a in sorted(ADMINS)]
+    rows += [[(f"🎁 {dashboard.short(name or str(uid), 24)}", f"u:gift:{uid}"), ("❌", f"u:del:{uid}")]
+             for uid, name in users().items()]
     return kb(rows + [[("➕ Добавить по ID", "u:add")], [("⬅️ Меню", "menu")]])
 
 
@@ -627,12 +630,6 @@ async def push_morning(bot: Bot, chats, hello=False):
         await push_extras(bot, chats)
 
 
-def me_kb(p):
-    return kb([[("🏙 Город" + (f": {p['city']}" if p and p["city"] else ""), "me:city")],
-               [("Знак: " + (daily_extras.SIGN_NAME[p["sign"]] if p and p["sign"] else "не выбран"), "me:sign")],
-               [("👀 Показать на сегодня", "me:show")], [("⬅️ Меню", "menu")]])
-
-
 async def push_extras(bot: Bot, chats):
     """После утренней сводки: каждому — погода в его городе и гороскоп по его знаку."""
     today = datetime.now(MSK).date()
@@ -640,12 +637,8 @@ async def push_extras(bot: Bot, chats):
         try:
             p = daily_extras.get(db, chat)
             text = await asyncio.to_thread(daily_extras.message, p, today)
-            if text:
+            if text:  # город и знак задаёт владелец в «👥 Пользователи» → 🎁
                 await bot.send_message(chat, text)
-            elif not p or not p["asked"]:  # один раз предлагаем указать город и знак
-                daily_extras.save(db, chat, asked=1)
-                await bot.send_message(chat, "Хотите утром получать погоду в вашем городе и гороскоп? "
-                                             "Укажите город и знак зодиака:", reply_markup=me_kb(p))
         except Exception as e:  # noqa: BLE001 — одному не дошло, остальным шлём
             log.warning("погода и гороскоп %s: %r", chat, e)
 
@@ -751,23 +744,6 @@ async def on_button(cb: CallbackQuery):
         await card(msg, f"{t}:{key}", kind)
     elif d == "pos" or d.startswith("pos:"):
         await pos_button(msg, cb.from_user.id, d)
-    elif d == "me":
-        await msg.answer("Утром после сводки пришлю погоду в вашем городе и гороскоп на день.",
-                         reply_markup=me_kb(daily_extras.get(db, cb.from_user.id)))
-    elif d == "me:city":
-        waiting[cb.from_user.id] = "city"
-        await msg.answer("Напишите ваш город, например: Казань.")
-    elif d == "me:sign":
-        signs = daily_extras.SIGNS
-        await msg.answer("Ваш знак зодиака:", reply_markup=kb(
-            [[(n, f"me:z:{k}") for k, n in signs[i:i + 3]] for i in range(0, 12, 3)] + [[("⬅️ Назад", "me")]]))
-    elif d.startswith("me:z:"):
-        daily_extras.save(db, cb.from_user.id, sign=d[5:])
-        await msg.answer(f"Запомнила: {daily_extras.SIGN_NAME[d[5:]]}.", reply_markup=me_kb(daily_extras.get(db, cb.from_user.id)))
-    elif d == "me:show":
-        p = daily_extras.get(db, cb.from_user.id)
-        text = await asyncio.to_thread(daily_extras.message, p, datetime.now(MSK).date())
-        await msg.answer(text or "Сначала укажите город и знак зодиака.", reply_markup=me_kb(p))
     elif d == "ts":
         await msg.answer("TrueStats — общие показатели, как на экране оцифровки. За какой период?", reply_markup=TS_MENU)
     elif d in ("ts:y", "ts:w"):
@@ -926,7 +902,8 @@ async def pos_button(msg: Message, user, d):
 async def users_button(msg: Message, admin, d):
     if d == "u":
         n = len(users())
-        await msg.answer(f"Пользователи бота: {n}. Нажмите на имя, чтобы закрыть доступ.\n"
+        await msg.answer(f"Пользователи бота: {n}. 🎁 — город и дата рождения для утренней погоды и гороскопа "
+                         "(человек об этом не знает, пока не придёт первое сообщение), ❌ — закрыть доступ.\n"
                          "Проще всего добавить так: человек пишет боту /start, вам приходит запрос с кнопкой «Дать доступ».",
                          reply_markup=users_kb())
     elif d == "u:add":
@@ -937,6 +914,12 @@ async def users_button(msg: Message, admin, d):
         add_user(uid, access_requests.pop(uid, str(uid)))
         await msg.answer(f"Доступ открыт: {users()[uid]}.", reply_markup=users_kb())
         await msg.bot.send_message(uid, "Доступ к боту аналитики AlisaFox открыт. Нажмите /start")
+    elif d.startswith("u:gift:"):
+        uid = int(d[7:])
+        waiting[admin] = f"gift:{uid}"
+        await msg.answer(f"Сейчас: {daily_extras.describe(daily_extras.get(db, uid))}.\n"
+                         "Пришлите город и дату рождения, например: Казань 12.05 (год не нужен). "
+                         "Чтобы отключить — пришлите «нет».")
     elif d.startswith("u:no:"):
         access_requests.pop(int(d[5:]), None)
         await msg.answer("Запрос отклонён.")
@@ -966,18 +949,31 @@ async def on_text(msg: Message):
         await msg.answer(f"Добавлен: {name}. Пусть нажмёт /start в боте.", reply_markup=users_kb())
         return
     mode = waiting.get(msg.from_user.id, "")
-    if mode == "city":
+    if mode.startswith("gift:") and is_admin(msg.from_user.id):
+        uid = int(mode[5:])
+        if (msg.text or "").strip().lower() in ("нет", "убрать", "отключить"):
+            waiting.pop(msg.from_user.id)
+            daily_extras.save(db, uid, city=None, lat=None, lon=None, tz=None, sign=None)
+            return await msg.answer("Отключила погоду и гороскоп для этого пользователя.", reply_markup=users_kb())
+        parsed = daily_extras.parse_gift(msg.text)
+        if not parsed:
+            return await msg.answer("Не поняла. Формат: Казань 12.05")
+        city, day, month = parsed
         try:
-            found = await asyncio.to_thread(daily_extras.find_city, msg.text or "")
+            found = await asyncio.to_thread(daily_extras.find_city, city)
         except Exception as e:  # noqa: BLE001
             log.warning("поиск города: %r", e)
             return await msg.answer("Сервис погоды сейчас не отвечает, попробуйте чуть позже.")
         if not found:
-            return await msg.answer("Не нашла такой город. Напишите по-другому, например: Санкт-Петербург.")
+            return await msg.answer("Не нашла такой город. Напишите по-другому, например: Санкт-Петербург 12.05")
         waiting.pop(msg.from_user.id)
-        city, lat, lon, tz = found
-        daily_extras.save(db, msg.from_user.id, city=city, lat=lat, lon=lon, tz=tz)
-        return await msg.answer(f"Запомнила город: {city}.", reply_markup=me_kb(daily_extras.get(db, msg.from_user.id)))
+        name, lat, lon, tz = found
+        daily_extras.save(db, uid, city=name, lat=lat, lon=lon, tz=tz, sign=daily_extras.sign_of(day, month))
+        p = daily_extras.get(db, uid)
+        preview = await asyncio.to_thread(daily_extras.message, p, datetime.now(MSK).date())
+        return await msg.answer(f"Готово: {daily_extras.describe(p)}. Утром после сводки придёт так:\n\n"
+                                + (preview or "(погода и гороскоп сейчас не загрузились — проверю утром)"),
+                                reply_markup=users_kb())
     if mode == "ts":
         period = parse_period(msg.text, yesterday())
         if not period:
