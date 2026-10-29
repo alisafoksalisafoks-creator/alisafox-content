@@ -225,3 +225,19 @@ def describe(p):
     if not p or (p["city"] is None and p["sign"] is None):
         return "не задано"
     return f"{p['city'] or 'город не задан'}, {SIGN_NAME.get(p['sign'], 'знак не задан')}"
+
+
+if __name__ == "__main__":  # проверка на сервере: .venv/bin/python -m bot.daily_extras
+    from datetime import datetime, timedelta, timezone
+
+    from bot import env  # noqa: F401
+    from bot import store
+
+    db = store.connect()
+    db.execute("create table if not exists users (id integer primary key, name text, added text)")
+    users = {r[0]: r[1] for r in db.execute("select id, name from users")}
+    admins = {int(x) for x in os.environ.get("TELEGRAM_CHAT_ID", "").replace(" ", "").split(",") if x}
+    print("Не нашла:", ", ".join(sync_people(db, users, admins)) or "всех нашла")
+    today = (datetime.now(timezone.utc) + timedelta(hours=3)).date()
+    for p in db.execute("select * from profile where sign is not null or lat is not null"):
+        print(f"\n— {users.get(p['id'], 'владелец' if p['id'] in admins else p['id'])} —\n{message(p, today)}")
