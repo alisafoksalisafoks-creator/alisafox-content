@@ -3,3 +3,4 @@ __pycache__/
 .env
 .venv/
 bot/costs_fallback.csv
+bot/people.txt

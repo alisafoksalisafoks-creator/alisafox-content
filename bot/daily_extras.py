@@ -1,9 +1,10 @@
 """Утром после сводки: погода в городе пользователя и гороскоп по его знаку на сегодня.
 
 Погода — Open-Meteo (бесплатно, без ключа), гороскоп — ежедневный XML ignio.com (по-русски, без ключа).
-Город и дату рождения задаёт владелец: «👥 Пользователи» → 🎁 (сюрприз для пользователя).
+Город и дату рождения владелец пишет в bot/people.txt на сервере (сюрприз для пользователя, в git не попадает).
 """
 import logging
+import os
 import re
 import xml.etree.ElementTree as ET
 
@@ -25,6 +26,8 @@ WMO = {0: "☀️ ясно", 1: "🌤 малооблачно", 2: "⛅ пере�
 def ensure(db):
     db.execute("create table if not exists profile (id integer primary key, city text, lat real, lon real, tz text, "
                "sign text, asked integer default 0)")
+    if "city_src" not in [r[1] for r in db.execute("pragma table_info(profile)")]:
+        db.execute("alter table profile add column city_src text")
     db.commit()
 
 
@@ -160,6 +163,55 @@ def parse_gift(text):
         return None
     d, mo = int(m.group(2)), int(m.group(3))
     return (m.group(1).strip(), d, mo) if 1 <= mo <= 12 and 1 <= d <= 31 else None
+
+
+PEOPLE = os.path.join(os.path.dirname(__file__), "people.txt")
+
+
+def read_people(path=None):
+    """Строки «кто; город; ДД.ММ» → [(кто, город, день, месяц)]. Кто — Telegram ID, «я» (владелец) или имя из «Пользователей»."""
+    out, path = [], path or PEOPLE
+    if not os.path.exists(path):
+        return out
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            parts = [x.strip() for x in line.split(";")]
+            if len(parts) < 3 or line.lstrip().startswith("#"):
+                continue
+            m = re.match(r"(\d{1,2})\.(\d{1,2})", parts[2])
+            if m:
+                out.append((parts[0], parts[1], int(m.group(1)), int(m.group(2))))
+    return out
+
+
+def resolve(who, users, admins):
+    """Кто → Telegram ID: цифры, «я» — владелец, иначе ищем по имени в списке пользователей."""
+    if who.isdigit():
+        return int(who)
+    if who.lower() in ("я", "владелец"):
+        return min(admins) if admins else None
+    hits = [uid for uid, name in users.items() if who.lower() in (name or "").lower()]
+    return hits[0] if len(hits) == 1 else None
+
+
+def sync_people(db, users, admins):
+    """Переносит people.txt в профили; город ищем заново, только если он поменялся. Возвращает непонятые строки."""
+    bad = []
+    for who, city, day, month in read_people():
+        uid = resolve(who, users, admins)
+        if not uid:
+            bad.append(who)
+            continue
+        p = get(db, uid)
+        if not p or (p["city_src"] or "") != city or p["lat"] is None:
+            found = find_city(city)
+            if not found:
+                bad.append(f"{who}: город {city}")
+                continue
+            name, lat, lon, tz = found
+            save(db, uid, city=name, lat=lat, lon=lon, tz=tz, city_src=city)
+        save(db, uid, sign=sign_of(day, month))
+    return bad
 
 
 def describe(p):
