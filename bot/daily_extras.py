@@ -203,12 +203,13 @@ def resolve(who, users, admins):
 
 def sync_people(db, users, admins):
     """Переносит people.txt в профили; город ищем заново, только если он поменялся. Возвращает непонятые строки."""
-    bad = []
+    bad, seen = [], set()
     for who, city, day, month in read_people():
         uid = resolve(who, users, admins)
         if not uid:
             bad.append(who)
             continue
+        seen.add(uid)
         p = get(db, uid)
         if not p or (p["city_src"] or "") != city or p["lat"] is None:
             found = find_city(city)
@@ -218,6 +219,11 @@ def sync_people(db, users, admins):
             name, lat, lon, tz = found
             save(db, uid, city=name, lat=lat, lon=lon, tz=tz, city_src=city)
         save(db, uid, sign=sign_of(day, month))
+    ensure(db)  # кого убрали из файла — тому больше не шлём
+    gone = [r[0] for r in db.execute("select id from profile where sign is not null or lat is not null")
+            if r[0] not in seen]
+    for uid in gone:
+        save(db, uid, city=None, lat=None, lon=None, tz=None, sign=None, city_src=None)
     return bad
 
 
