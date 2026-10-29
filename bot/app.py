@@ -22,7 +22,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton, Inl
                            Message)
 
 from bot import env  # noqa: F401  (подхватывает .env до чтения ключей)
-from bot import cards, coinvest, dashboard, keywords, morning, positions, profit, restock, signals, store
+from bot import cards, coinvest, dashboard, keywords, morning, positions, prices, profit, restock, signals, store
 from bot.category_report import MSK
 from bot.sources import gsheet_costs
 from bot.sources.moysklad import Catalog, is_test
@@ -41,6 +41,8 @@ oz = OzonClient()
 waiting: dict[int, str] = {}  # кто прислал артикул: "card" — карточка, "signals" — сигналы по остаткам
 _signals = {"at": 0.0, "skus": None}
 _losses = {"at": 0.0, "data": None}
+_actions = {"at": 0.0, "data": None}
+ACTIONS_TTL = 1800  # акции Ozon перечитываются не чаще раза в 30 минут
 LOSS_DAYS = 14  # минусовые артикулы — за последние 2 недели
 SIGNALS_TTL = 3600  # сигналы по остаткам пересчитываются не чаще раза в час
 
@@ -75,7 +77,8 @@ def period_kb(target, kind):
     mark = {k: ("• " if k == kind else "") for k in cards.PERIODS}
     return kb([[(f"{mark['day']}Вчера", f"p:{target}:day"), (f"{mark['week']}Неделя", f"p:{target}:week"),
                 (f"{mark['month']}Месяц", f"p:{target}:month")],
-               [("🚦 Сигналы", f"r:{target}"), ("⬅️ Меню", "menu")]])
+               [("🚦 Сигналы", f"r:{target}")] + ([("💰 Цены", f"pr:{target[2:]}")] if target.startswith("s:") else [])
+               + [("⬅️ Меню", "menu")]])
 
 
 db.execute("create table if not exists users (id integer primary key, name text, added text)")
@@ -273,7 +276,8 @@ def build_losses():
         c["loss"] += x["profit"]
     for c in cats.values():
         c["items"].sort(key=lambda x: x["profit"])
-    return {"start": start, "end": end, "cats": sorted(cats.values(), key=lambda c: c["loss"]), "total": len(rows)}
+    return {"start": start, "end": end, "cats": sorted(cats.values(), key=lambda c: c["loss"]), "total": len(rows),
+            "all": rows}
 
 
 async def losses(msg: Message):
@@ -497,6 +501,47 @@ async def coinvest_sku(msg: Message, k, sku):
                    kb([[("⬅️ Категория", f"co:{k}:c:{tid[0]}" if tid else f"co:p:{k}"), ("⬅️ Меню", "menu")]]))
 
 
+async def price_card(msg: Message, sku):
+    """Кнопка «Цены» в карточке артикула: цена, соинвест, пороги акций, скидка от количества. Только чтение."""
+    s = store.find_sku(db, sku)
+    if not s or not s["offer_id"]:
+        return await msg.answer("Не нашла артикул продавца для этого SKU.", reply_markup=MENU)
+    first = _actions["data"] is None or time.time() - _actions["at"] > ACTIONS_TTL
+    await msg.answer("Собираю цены и акции Ozon" + (", прибыль за 2 недели — до 2 минут…" if _losses["data"] is None
+                                                    else "…" if not first else ", до минуты…"))
+    if first:
+        _actions["data"] = await asyncio.to_thread(prices.actions, oz)
+        _actions["at"] = time.time()
+    p = await asyncio.to_thread(prices.price_info, oz, s["offer_id"])
+    if not p:
+        return await msg.answer("Ozon не отдал цену по этому артикулу.", reply_markup=kb([[("⬅️ Меню", "menu")]]))
+    try:
+        steps = await asyncio.to_thread(prices.stairway, oz, sku)
+    except Exception as e:  # noqa: BLE001 — бета-метод Ozon, без него остальная сводка нужна
+        log.warning("скидка от количества %s: %r", sku, e)
+        steps = []
+    x = (await losses(msg))["all"].get(sku)
+    unit = {"profit": x["profit"] / x["units"], "drr": x["ads"] / x["revenue"] * 100 if x["revenue"] else None} \
+        if x and x["units"] > 0 else {}
+    sm = prices.summary(p, _actions["data"], unit)
+    end = await coinvest_end(msg)
+    co = next((r for r in coinvest.table(db, end, "sku", s["type_id"], period="7 дней") if r["key"] == sku), None) \
+        if end else None
+    rec, now = sm["rec"], [r for r in sm["rows"] if not r["inside"] and r["need"] == 0]
+    caption = f"Цены: {s['offer_id']} · {dashboard.num(p['price'] or 0)} ₽"
+    if now:
+        caption += f"\nМожно добавить без снижения цены: «{now[0]['action']}»."
+    if rec:
+        caption += (f"\nЧтобы попасть в «{rec['action']}» ({rec['what']}), снизьте цену на {dashboard.num(rec['need'])} ₽ "
+                    f"(−{rec['need_pct']:.0f}%) до {dashboard.num(rec['limit'])} ₽"
+                    + (f", прибыль ≈ {dashboard.num(rec['profit'])} ₽/шт." if rec["profit"] is not None else "."))
+    elif not now and any(not r["inside"] and r["need"] for r in sm["rows"]):
+        caption += "\nВо все доступные акции — только в минус по прибыли. Снижать не советую."
+    caption += "\nМенять цену — в боте «Цены»."
+    await send_png(msg, lambda path: dashboard.price_png(sm, s["offer_id"], s["name"], (co or {}).get("7 дней"), steps, path),
+                   caption, kb([[("⬅️ Артикул", f"p:s:{sku}:week"), ("⬅️ Меню", "menu")]]))
+
+
 def render_morning(prefix):
     return dashboard.morning_png(morning.build(db, oz, data_day()), prefix)
 
@@ -606,6 +651,8 @@ async def on_button(cb: CallbackQuery):
         await card(msg, f"{t}:{key}", kind)
     elif d == "pos" or d.startswith("pos:"):
         await pos_button(msg, cb.from_user.id, d)
+    elif d.startswith("pr:"):
+        await price_card(msg, d[3:])
     elif d.startswith("r:"):
         t, key = d[2:].split(":", 1)
         await (category_signals(msg, key) if t == "c" else signal_sku(msg, key))

@@ -21,7 +21,29 @@ class OzonClient:
 
     def post(self, path, body, retries=5):
         for attempt in range(retries):
-            r = self.http.post(path, json=body)
+            try:
+                r = self.http.post(path, json=body)
+            except httpx.TransportError:  # обрыв связи — повторяем
+                if attempt == retries - 1:
+                    raise
+                time.sleep(2 ** attempt * 2)
+                continue
+            if r.status_code == 429 or r.status_code >= 500:
+                time.sleep(2 ** attempt * 5)
+                continue
+            r.raise_for_status()
+            return r.json()
+        r.raise_for_status()
+
+    def get(self, path, retries=5):
+        for attempt in range(retries):
+            try:
+                r = self.http.get(path)
+            except httpx.TransportError:  # обрыв связи — повторяем
+                if attempt == retries - 1:
+                    raise
+                time.sleep(2 ** attempt * 2)
+                continue
             if r.status_code == 429 or r.status_code >= 500:
                 time.sleep(2 ** attempt * 5)
                 continue

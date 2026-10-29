@@ -25,6 +25,8 @@ def num(x):
 
 
 def fmt_value(name, v):
+    if v is None:
+        return "—"
     return f"{v:.1f}" if "%" in name else num(v)
 
 
@@ -667,3 +669,68 @@ def keywords_png(data, prefix):
     empty = "● нет активной кампании «Вывод в топ»" if not camps else "● фраз за период нет"
     return paths + _sheets(title, period + (f" · {short(camps, 30)}" if camps else ""), "Запросы РК", cols, rows,
                            empty, prefix + "_a", KW_AD_NOTE, per_sheet=15, max_sheets=1, tiles=ad_tiles)
+
+
+PRICE_NOTE = ("Порог — цена, при которой Ozon берёт товар в акцию (для бустинга — вход и максимальный бустинг).\n"
+              "Прибыль на 1 шт при новой цене ≈ прибыль за 2 недели + Δцены × (1 − комиссия − ДРР) × (1 − УСН 7%).\n"
+              "Соинвест сейчас — по цене с картой на сайте, 7 дней — по отчёту о реализации.\n"
+              "Бот только показывает. Менять цену и скидку — в боте «Цены».")
+INDEX = {"GREEN": ("выгодная", GOOD), "YELLOW": ("умеренная", WARN), "RED": ("невыгодная", BAD)}
+
+
+def _profit_cell(v):
+    return (_rub(v), BAD if v is not None and v < 0 else INK, v is not None)
+
+
+def _rub(v):
+    return f"{num(v)} ₽" if v is not None else "—"
+
+
+def price_png(s, title, name, co7, steps, prefix):
+    """Цены артикула: плитки с ценой и соинвестом, пороги акций, скидка от количества."""
+    from bot.prices import forecast as price_forecast
+
+    price, unit = s["price"], s["unit"]
+    co_lab = pp_style(co7.get("delta")) if co7 else ("нет продаж", MUTED)
+    idx = INDEX.get(s.get("index") or "")
+    tiles = [{"name": "Цена, ₽", "value": price or 0, "label": idx or ("", INK)},
+             {"name": "С вашими акциями, ₽", "value": s.get("seller_price") or 0, "plain": True},
+             {"name": "На сайте с картой, ₽", "value": s.get("site"), "plain": True},
+             {"name": "Соинвест сейчас, %", "value": s.get("coinvest_now"), "plain": True},
+             {"name": "Соинвест 7 дней, %", "value": (co7 or {}).get("pct"), "label": co_lab},
+             {"name": "Прибыль на 1 шт, ₽", "value": unit.get("profit"),
+              "label": (f"ДРР {unit['drr']:.0f}%", INK2) if unit.get("drr") is not None else ("нет продаж", MUTED)}]
+    cols = [(0.05, "Акция", "left"), (0.56, "порог", "right"), (0.76, "снизить", "right"), (0.95, "прибыль/шт", "right")]
+    rows = []
+    for r in s["rows"]:
+        if r["limit"] is None:
+            cut = ("нет порога", MUTED, False)
+        elif r["need"] == 0:
+            cut = ("проходит", GOOD, True)
+        else:
+            cut = (f"−{num(r['need'])} ({r['need_pct']:.0f}%)", WARN, True)
+        pr = r["profit"]
+        state = "участвуете" + (f", бустинг {r['boost']}%" if r.get("boost") else "") if r["inside"] else "можно добавить"
+        rows.append(([(short(r["action"], 30), GOOD if r["inside"] else INK, True), (_rub(r["limit"]), INK, False), cut,
+                      _profit_cell(pr)],
+                     short(f"{r['what']} · {state}" + (f" · до {r['end'][8:10]}.{r['end'][5:7]}" if r.get("end") else ""), 70)))
+    base = s.get("seller_price") or price
+    srows = [([(f"от {q} шт", INK, True), (f"−{d}%", INK, False), (_rub(base * (1 - d / 100)) if base else "—", INK, False),
+               _profit_cell(price_forecast(unit, price, base * (1 - d / 100)) if base else None)], "") for q, d in steps]
+    h = 0.35 + 0.78 + 2 * 1.0 + 1.0 + 0.42 * max(1, len(rows)) + 1.0 + 0.42 * max(1, len(srows)) + 1.0
+    p = Page(h, SHEET_W)
+    p.header(short(title, 28), short(name, 60))
+    p.tiles(tiles)
+    p.table("Акции Ozon: порог и на сколько снизить цену", cols,
+            rows or [([("● товара нет ни в одной акции Ozon", MUTED, True), None, None, None], "")])
+    p.table("Скидка от количества", [(0.05, "Сколько", "left"), (0.56, "скидка", "right"), (0.76, "≈ за 1 шт", "right"),
+                                      (0.95, "прибыль/шт", "right")],
+            srows or [([("● не включена", MUTED, True), None, None, None], "")])
+    paths = []
+    extra = []
+    if s.get("min_price") and price and s["min_price"] >= price:
+        extra.append(f"Мин. цена {num(s['min_price'])} ₽ = текущей: в автоакции ниже неё Ozon не добавит.")
+    if s.get("errors"):
+        extra.append(f"Ozon не ответил по {len(s['errors'])} акциям.")
+    _save(p, prefix, paths, PRICE_NOTE + ("\n" + " ".join(extra) if extra else ""))
+    return paths
