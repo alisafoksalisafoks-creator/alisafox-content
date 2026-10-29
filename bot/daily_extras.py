@@ -60,13 +60,49 @@ def weather(p):
     r.raise_for_status()
     d = {k: v[0] for k, v in r.json()["daily"].items()}
 
-    def t(x):
-        return f"{round(x):+d}°".replace("+0°", "0°")
-    rain = d.get("precipitation_probability_max")
-    return (f"🌤 Погода в г. {p['city']} сегодня: {WMO.get(d.get('weather_code'), 'без описания')}, "
-            f"{t(d['temperature_2m_min'])}…{t(d['temperature_2m_max'])}"
-            + (f", осадки {rain}%" if rain is not None else "")
-            + f", ветер до {round(d['wind_speed_10m_max'] / 3.6)} м/с.")
+    return weather_text(p["city"], d)
+
+
+def weather_text(city, d):
+    """Живым языком: что за погода и как одеться. d — дневной прогноз Open-Meteo."""
+    code, lo, hi = d.get("weather_code"), d["temperature_2m_min"], d["temperature_2m_max"]
+    wind = round(d["wind_speed_10m_max"] / 3.6)  # Open-Meteo отдаёт км/ч
+    rain = d.get("precipitation_probability_max") or 0
+    sky = WMO.get(code, "").split(" ", 1)
+    icon, what = (sky[0], sky[1]) if len(sky) == 2 else ("🌤", "")
+    temp = f"от {round(lo)} до {round(hi)} градусов" if round(lo) != round(hi) else f"{round(hi)} градусов"
+    lines = [f"{icon} {city}: сегодня {what + ', ' if what else ''}{temp}, ветер до {wind} м/с."]
+    tips = []
+    if hi <= -10:
+        tips.append("На улице мороз — одевайтесь очень тепло, не забудьте шапку и перчатки")
+    elif hi <= 0:
+        tips.append("Холодно — одевайтесь тепло")
+    elif hi <= 8:
+        tips.append("Прохладно — одевайтесь теплее")
+    elif hi <= 15:
+        tips.append("Свежо — пригодится куртка")
+    elif hi >= 28:
+        tips.append("Жарко — пейте больше воды")
+    if code in (71, 73, 75, 77, 85, 86):
+        tips.append("идёт снег, на дорогах будьте осторожнее")
+    elif code in (95, 96, 99):
+        tips.append("возможна гроза, возьмите зонт")
+    elif rain >= 50 or code in (51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82):
+        tips.append("возьмите зонт")
+    if wind >= 15:
+        tips.append("ветер сильный — берегитесь сквозняков")
+    elif wind >= 10:
+        tips.append("ветрено")
+    if tips:
+        t = ", ".join(tips)
+        lines.append(t[0].upper() + t[1:] + ".")
+    return " ".join(lines)
+
+
+def short_text(text, n=3):
+    """Первые n предложений."""
+    parts = re.split(r"(?<=[.!?…])\s+", text.strip())
+    return " ".join(parts[:n])
 
 
 _horo = {"day": None, "data": {}}
@@ -81,7 +117,7 @@ def horoscope(sign, day):
         _horo["data"] = {s: re.sub(r"\s+", " ", (root.findtext(f"{s}/today") or "")).strip() for s, _ in SIGNS}
         _horo["day"] = day
     text = _horo["data"].get(sign)
-    return f"{SIGN_NAME[sign]} — гороскоп на сегодня:\n{text}" if text else None
+    return f"{SIGN_NAME[sign]}, гороскоп на сегодня: {short_text(text)}" if text else None
 
 
 def message(p, day):
