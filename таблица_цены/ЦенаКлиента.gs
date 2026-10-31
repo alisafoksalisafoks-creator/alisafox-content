@@ -41,8 +41,11 @@ const CP = {
     WB:   'Цена клиента WB',
   },
 
-  // Сколько дней назад искать последнюю продажу товара для цены клиента Ozon.
+  // Сколько дней назад искать последнюю продажу товара для цены клиента Ozon и WB.
   OZON_FACT_DAYS: 14,
+
+  // СПП WB, %, для товаров без заказов за 14 дней (медиана по заказам на 31.10.2026).
+  WB_SPP_DEFAULT: 20,
 
   // Что писать, если артикул не найден в API (пусто = очистить ячейку).
   NOT_FOUND_TEXT: '',
@@ -59,7 +62,7 @@ function addClientPriceMenu() {
     .createMenu('💰 Цены клиента')
     .addItem('🔄 Ozon: факт цена покупателя', 'cpUpdateOzon')
     .addItem('🔄 Яндекс Маркет: цена на витрине', 'cpUpdateYM')
-    .addItem('🔄 Wildberries: цена со скидкой', 'cpUpdateWB')
+    .addItem('🔄 Wildberries: цена покупателя (с СПП)', 'cpUpdateWB')
     .addSeparator()
     .addItem('🔄 Все три площадки', 'cpUpdateAll')
     .addSeparator()
@@ -496,28 +499,53 @@ function cpYMPrices_() {
 }
 
 // ===================== WILDBERRIES =====================
-// Цена со скидкой: discountedPrice из API «Цены и скидки» (без СПП и без кошелька ВБ).
-// Если у размеров разные цены — берётся минимальная.
-// Ключи строки: артикул ВБ (nmID) и артикул продавца (vendorCode).
+// Цена клиента WB:
+//   1) был заказ за 14 дней — сколько заплатил покупатель (finishedPrice из заказов, с СПП),
+//      средняя за последний день с заказами;
+//   2) заказов не было — цена со скидкой (discountedPrice) минус СПП CP.WB_SPP_DEFAULT %.
+// Кошелёк ВБ не учитывается. Ключи строки: nmID и артикул продавца (vendorCode).
 
 function cpWBPrices_() {
   const token = cpProp_('WB_API_KEY');
   if (!token) throw new Error('Не задан токен Wildberries: меню → ⚙️ Настройки.');
   const h = { Authorization: token };
   const map = {};
+  const k = 1 - CP.WB_SPP_DEFAULT / 100;
   let offset = 0, guard = 0;
   while (guard++ < 500) {
     const r = cpHttp_('https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=1000&offset=' + offset, { headers: h });
     const list = (r.data && r.data.listGoods) || [];
     list.forEach(g => {
       const ps = (g.sizes || []).map(s => Number(s.discountedPrice)).filter(x => x > 0);
-      const p = ps.length ? Math.min.apply(null, ps) : null;
+      const p = ps.length ? Math.min.apply(null, ps) * k : null;
       if (p) { cpAddPrice_(map, g.nmID, p); cpAddPrice_(map, g.vendorCode, p); }
     });
     if (list.length < 1000) break;
     offset += 1000;
     Utilities.sleep(700); // лимит WB: не чаще 10 запросов за 6 сек
   }
+
+  // Факт из заказов за 14 дней (токен должен иметь доступ к «Статистике»).
+  let orders = [];
+  try {
+    const from = Utilities.formatDate(new Date(Date.now() - CP.OZON_FACT_DAYS * 864e5), 'Europe/Moscow', 'yyyy-MM-dd');
+    orders = cpHttp_('https://statistics-api.wildberries.ru/api/v1/supplier/orders?dateFrom=' + from, { headers: h }) || [];
+  } catch (e) { orders = []; } // нет доступа к статистике — остаётся оценка по СПП
+  const byKey = {};
+  orders.forEach(o => {
+    if (!(o.finishedPrice > 0)) return;
+    const day = String(o.date).slice(0, 10);
+    [o.supplierArticle, o.nmId].forEach(key => {
+      const kk = cpNormKey_(key); if (!kk) return;
+      const d = byKey[kk] || (byKey[kk] = {});
+      (d[day] || (d[day] = [])).push(Number(o.finishedPrice));
+    });
+  });
+  Object.keys(byKey).forEach(kk => {
+    const days = Object.keys(byKey[kk]).sort();
+    const v = byKey[kk][days[days.length - 1]];
+    map[kk] = Math.round(v.reduce((a, b) => a + b, 0) / v.length);
+  });
   return map;
 }
 
