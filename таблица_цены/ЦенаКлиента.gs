@@ -6,7 +6,7 @@
  *   - по артикулу площадки в строке берёт из API цену, которую видит покупатель,
  *     и пишет её в колонку «Цена клиента <площадка>»;
  *   - Ozon: сколько реально заплатил покупатель (дневной отчёт о реализации, средняя за день):
- *     вчера, если продаж не было — позавчера и так до 14 дней; совсем без продаж — цена на сайте. Обновляется сам каждое утро и по кнопке;
+ *     вчера, если продаж не было — позавчера и так до 14 дней; совсем без продаж — цена на сайте. Обновляется только по кнопке;
  *   - ЯМ: цена на витрине; WB: цена со скидкой (кошелёк ВБ не учитывается);
  *   - колонки ищутся по НАЗВАНИЮ в шапке, а не по букве: удаление и перестановка столбцов не ломают скрипт;
  *   - пишет во ВСЕ строки, в том числе скрытые и отфильтрованные;
@@ -39,9 +39,6 @@ const CP = {
     YM:   'Цена клиента ЯМ',
     WB:   'Цена клиента WB',
   },
-
-  // Во сколько (час МСК) каждый день обновлять цену клиента Ozon.
-  OZON_FACT_HOUR: 10,
 
   // Сколько дней назад искать последнюю продажу товара для цены клиента Ozon.
   OZON_FACT_DAYS: 14,
@@ -86,15 +83,12 @@ function cpInstall() {
     .filter(t => t.getHandlerFunction() === 'addClientPriceMenu')
     .forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('addClientPriceMenu').forSpreadsheet(ss).onOpen().create();
-  // Ежедневное обновление цены клиента Ozon.
+  // Автообновления нет — только кнопки. Убираем старый дневной триггер, если остался.
   ScriptApp.getProjectTriggers()
     .filter(t => t.getHandlerFunction() === 'cpDailyOzon')
     .forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('cpDailyOzon').timeBased().everyDays(1)
-    .atHour(CP.OZON_FACT_HOUR).inTimezone('Europe/Moscow').create();
   addClientPriceMenu();
-  ss.toast('Меню «💰 Цены клиента» установлено, цена Ozon будет обновляться каждый день в ' +
-    CP.OZON_FACT_HOUR + ':00 МСК. Теперь задайте ключи: меню → ⚙️ Настройки.', 'Цены клиента', 10);
+  ss.toast('Меню «💰 Цены клиента» установлено. Теперь задайте ключи: меню → ⚙️ Настройки.', 'Цены клиента', 8);
 }
 
 // ===================== КНОПКИ =====================
@@ -103,8 +97,6 @@ function cpUpdateOzon() { cpRun_('OZON'); }
 function cpUpdateYM()   { cpRun_('YM'); }
 function cpUpdateWB()   { cpRun_('WB'); }
 function cpUpdateAll()  { ['OZON', 'YM', 'WB'].forEach(mp => cpRun_(mp, true)); }
-/** Для ежедневного триггера: без окон, только запись. */
-function cpDailyOzon() { cpUpdate_('OZON'); }
 
 function cpRun_(mp, silent) {
   const ss = SpreadsheetApp.getActive();
