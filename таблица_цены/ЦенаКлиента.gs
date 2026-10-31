@@ -216,7 +216,7 @@ function cpNormKey_(v) {
 function cpAddPrice_(map, key, price) {
   const k = cpNormKey_(key);
   const p = Number(price);
-  if (k && isFinite(p) && p > 0) map[k] = Math.round(p * 100) / 100;
+  if (k && isFinite(p) && p > 0) map[k] = Math.round(p); // цена клиента — целым числом
 }
 
 function cpFetch_(mp) {
