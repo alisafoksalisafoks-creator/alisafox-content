@@ -5,7 +5,9 @@
  * Что делает:
  *   - по артикулу площадки в строке берёт из API цену, которую видит покупатель,
  *     и пишет её в колонку «Цена клиента <площадка>»;
- *   - Ozon: цена на сайте; ЯМ: цена на витрине; WB: цена со скидкой (кошелёк ВБ не учитывается);
+ *   - Ozon: сколько реально заплатил покупатель (дневной отчёт о реализации, средняя за день):
+ *     вчера, если продаж не было — позавчера и так до 14 дней; совсем без продаж — цена на сайте. Обновляется сам каждое утро и по кнопке;
+ *   - ЯМ: цена на витрине; WB: цена со скидкой (кошелёк ВБ не учитывается);
  *   - колонки ищутся по НАЗВАНИЮ в шапке, а не по букве: удаление и перестановка столбцов не ломают скрипт;
  *   - пишет во ВСЕ строки, в том числе скрытые и отфильтрованные;
  *   - меню «💰 Цены клиента» с отдельной кнопкой на каждую площадку.
@@ -38,11 +40,18 @@ const CP = {
     WB:   'Цена клиента WB',
   },
 
+  // Во сколько (час МСК) каждый день обновлять цену клиента Ozon.
+  OZON_FACT_HOUR: 10,
+
+  // Сколько дней назад искать последнюю продажу товара для цены клиента Ozon.
+  OZON_FACT_DAYS: 14,
+
   // Что писать, если артикул не найден в API (пусто = очистить ячейку).
   NOT_FOUND_TEXT: '',
 };
 
 const MP_NAMES = { OZON: 'Ozon', YM: 'Яндекс Маркет', WB: 'Wildberries' };
+const KEY_OF = { OZON: 'OZON', YM: 'YM', WB: 'WB' };
 
 // ===================== МЕНЮ =====================
 
@@ -50,12 +59,13 @@ const MP_NAMES = { OZON: 'Ozon', YM: 'Яндекс Маркет', WB: 'Wildberri
 function addClientPriceMenu() {
   SpreadsheetApp.getUi()
     .createMenu('💰 Цены клиента')
-    .addItem('🔄 Ozon: цена на сайте', 'cpUpdateOzon')
+    .addItem('🔄 Ozon: факт цена покупателя', 'cpUpdateOzon')
     .addItem('🔄 Яндекс Маркет: цена на витрине', 'cpUpdateYM')
     .addItem('🔄 Wildberries: цена со скидкой', 'cpUpdateWB')
     .addSeparator()
     .addItem('🔄 Все три площадки', 'cpUpdateAll')
     .addSeparator()
+
     .addSubMenu(SpreadsheetApp.getUi().createMenu('⚙️ Настройки')
       .addItem('Ключи Ozon (Client-Id и Api-Key)', 'cpSetOzonKeys')
       .addItem('Ключ Яндекс Маркета (Api-Key)', 'cpSetYMKey')
@@ -76,8 +86,15 @@ function cpInstall() {
     .filter(t => t.getHandlerFunction() === 'addClientPriceMenu')
     .forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('addClientPriceMenu').forSpreadsheet(ss).onOpen().create();
+  // Ежедневное обновление цены клиента Ozon.
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'cpDailyOzon')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('cpDailyOzon').timeBased().everyDays(1)
+    .atHour(CP.OZON_FACT_HOUR).inTimezone('Europe/Moscow').create();
   addClientPriceMenu();
-  ss.toast('Меню «💰 Цены клиента» установлено. Теперь задайте ключи: меню → ⚙️ Настройки.', 'Цены клиента', 8);
+  ss.toast('Меню «💰 Цены клиента» установлено, цена Ozon будет обновляться каждый день в ' +
+    CP.OZON_FACT_HOUR + ':00 МСК. Теперь задайте ключи: меню → ⚙️ Настройки.', 'Цены клиента', 10);
 }
 
 // ===================== КНОПКИ =====================
@@ -86,6 +103,8 @@ function cpUpdateOzon() { cpRun_('OZON'); }
 function cpUpdateYM()   { cpRun_('YM'); }
 function cpUpdateWB()   { cpRun_('WB'); }
 function cpUpdateAll()  { ['OZON', 'YM', 'WB'].forEach(mp => cpRun_(mp, true)); }
+/** Для ежедневного триггера: без окон, только запись. */
+function cpDailyOzon() { cpUpdate_('OZON'); }
 
 function cpRun_(mp, silent) {
   const ss = SpreadsheetApp.getActive();
@@ -121,12 +140,12 @@ function cpUpdate_(mp) {
   const top = sh.getRange(1, 1, scan, lastCol).getDisplayValues();
   let headerRow = -1, keyCol = -1, keyHeader = '';
   for (let r = 0; r < top.length && keyCol < 0; r++) {
-    const found = cpFindCol_(top[r], CP.KEY_HEADERS[mp]);
+    const found = cpFindCol_(top[r], CP.KEY_HEADERS[KEY_OF[mp]]);
     if (found >= 0) { headerRow = r + 1; keyCol = found + 1; keyHeader = top[r][found]; }
   }
   if (keyCol < 0) {
-    throw new Error('Не нашёл колонку с артикулом ' + MP_NAMES[mp] + '. Ищу по названиям: ' +
-      CP.KEY_HEADERS[mp].join(', ') + '. Переименуйте колонку или добавьте её название в CP.KEY_HEADERS в коде.');
+    throw new Error('Не нашёл колонку с артикулом ' + MP_NAMES[KEY_OF[mp]] + '. Ищу по названиям: ' +
+      CP.KEY_HEADERS[KEY_OF[mp]].join(', ') + '. Переименуйте колонку или добавьте её название в CP.KEY_HEADERS в коде.');
   }
   const headers = top[headerRow - 1];
 
@@ -147,7 +166,9 @@ function cpUpdate_(mp) {
 
   // 4. Цены из API: карта «артикул → цена».
   const prices = cpFetch_(mp);
+  const note = prices.__note; delete prices.__note;
   const apiCount = Object.keys(prices).length;
+  prices.__note = note;
   if (!apiCount) throw new Error('API вернул 0 цен. Проверьте ключ: меню → ⚙️ Настройки → Проверить ключи.');
 
   // 5. Сопоставление.
@@ -166,7 +187,7 @@ function cpUpdate_(mp) {
   priceRange.setValues(out); // setValues пишет и в скрытые/отфильтрованные строки
   priceRange.setNumberFormat('#,##0 ₽');
   sh.getRange(headerRow, priceCol).setNote(
-    MP_NAMES[mp] + ': обновлено ' + Utilities.formatDate(new Date(), 'Europe/Moscow', 'dd.MM.yyyy HH:mm') +
+    MP_NAMES[mp] + (mp === 'OZON' ? ' — ' + (prices.__note || '') : '') + ': обновлено ' + Utilities.formatDate(new Date(), 'Europe/Moscow', 'dd.MM.yyyy HH:mm') +
     ' МСК, строк ' + updated + ', не найдено ' + notFound);
 
   return { updated, notFound, empty, apiCount, notFoundSamples, keyHeader };
@@ -206,7 +227,7 @@ function cpAddPrice_(map, key, price) {
 }
 
 function cpFetch_(mp) {
-  if (mp === 'OZON') return cpOzonPrices_();
+  if (mp === 'OZON') return cpOzonClientPrices_();
   if (mp === 'YM') return cpYMPrices_();
   if (mp === 'WB') return cpWBPrices_();
   throw new Error('Неизвестная площадка ' + mp);
@@ -245,8 +266,9 @@ function cpProp_(name) {
 }
 
 // ===================== OZON =====================
-// Цена на сайте: price.marketing_price из /v5/product/info/prices (цена на витрине с акциями, без Ozon Карты).
-// Если Озон вернул его пустым — берём marketing_seller_price, затем price.
+// Цена на сайте = website_prices.price из акций (/v2/actions/products и /candidates).
+// Это цена с Ozon Картой для FBO, именно её видит покупатель (проверено 31.10: OZ066 239 → 210 ₽).
+// Товар не в акциях — цена продавца price из /v5/product/info/prices.
 // Ключи строки: offer_id (артикул продавца), product_id и SKU Озона — подойдёт любой из них.
 
 function cpOzonHeaders_() {
@@ -259,6 +281,7 @@ function cpOzonPrices_() {
   const h = cpOzonHeaders_();
   const map = {};
   const byProductId = {};
+  const offers = {};
   let cursor = '', guard = 0;
   do {
     const r = cpHttp_('https://api-seller.ozon.ru/v5/product/info/prices', {
@@ -266,15 +289,21 @@ function cpOzonPrices_() {
       body: { cursor: cursor, filter: { visibility: 'ALL' }, limit: 1000 },
     });
     (r.items || []).forEach(it => {
-      const p = it.price || {};
-      const site = Number(p.marketing_price) || Number(p.marketing_seller_price) || Number(p.price);
-      cpAddPrice_(map, it.offer_id, site);
-      cpAddPrice_(map, it.product_id, site);
-      if (it.product_id) byProductId[it.product_id] = site;
+      if (it.product_id) { byProductId[it.product_id] = Number((it.price || {}).price); offers[it.product_id] = it.offer_id; }
     });
     cursor = r.cursor || '';
     if (!(r.items || []).length) break;
   } while (cursor && ++guard < 200);
+
+  // Цена на сайте из акций: участник акции важнее кандидата.
+  const site = cpOzonWebsitePrices_(h);
+  Object.keys(byProductId).forEach(pid => {
+    const s = site[pid];
+    const v = s ? (s.products || s.candidates) : byProductId[pid];
+    byProductId[pid] = v;
+    cpAddPrice_(map, pid, v);
+    cpAddPrice_(map, offers[pid], v);
+  });
 
   // SKU Озона по product_id
   const ids = Object.keys(byProductId);
@@ -290,6 +319,109 @@ function cpOzonPrices_() {
       const site = byProductId[it.id];
       if (it.sku) cpAddPrice_(map, it.sku, site);
       (it.sources || []).forEach(s => s.sku && cpAddPrice_(map, s.sku, site));
+    });
+  }
+  return map;
+}
+
+/** product_id → { products: мин. цена на сайте как участника акций, candidates: как кандидата }. */
+function cpOzonWebsitePrices_(h) {
+  const out = {};
+  const acts = (cpHttp_('https://api-seller.ozon.ru/v1/actions', { headers: h }).result) || [];
+  acts.forEach(a => {
+    ['products', 'candidates'].forEach(ep => {
+      let last = '', guard = 0;
+      do {
+        const r = cpHttp_('https://api-seller.ozon.ru/v2/actions/' + ep, {
+          method: 'post', headers: h, body: { action_id: a.id, limit: 100, last_id: last },
+        });
+        const list = r.products || [];
+        list.forEach(p => {
+          const w = Number(p.website_prices && p.website_prices.price && p.website_prices.price.amount);
+          if (!(w > 0)) return;
+          const o = out[p.id] || (out[p.id] = {});
+          o[ep] = o[ep] ? Math.min(o[ep], w) : w;
+        });
+        last = r.last_id || '';
+        if (!list.length) break;
+      } while (last && ++guard < 500);
+    });
+  });
+  return out;
+}
+
+// ===================== OZON: ФАКТ ЦЕНЫ ПОКУПАТЕЛЯ ЗА ВЧЕРА =====================
+// Дневной отчёт о реализации /v1/finance/realization/by-day:
+// delivery_commission.price_per_instance — сколько заплатил покупатель за штуку
+// (скидки за счёт Озона он компенсирует продавцу отдельно, поле bonus).
+// В отчёт попадают выкупы по дате получения. Несколько продаж за день — средняя цена.
+
+function cpDaysAgo_(n) {
+  const d = new Date(Date.now() - n * 24 * 3600 * 1000);
+  const f = x => Utilities.formatDate(d, 'Europe/Moscow', x);
+  return { day: Number(f('d')), month: Number(f('M')), year: Number(f('yyyy')), label: f('dd.MM.yyyy') };
+}
+
+/**
+ * Цена клиента Ozon = последняя фактическая цена покупателя:
+ * вчера; если вчера товар не продавался — позавчера, и так до CP.OZON_FACT_DAYS дней назад.
+ * Не было продаж за весь период — текущая цена на сайте.
+ */
+function cpOzonClientPrices_() {
+  const site = cpOzonPrices_();
+  const fact = {};
+  let daysOk = 0, first = '', last = '';
+  for (let n = 1; n <= CP.OZON_FACT_DAYS; n++) {
+    const y = cpDaysAgo_(n);
+    let day;
+    try { day = cpOzonFactPrices_(y); }
+    catch (e) { if (e.code === 404) continue; throw e; } // день ещё не сформирован
+    daysOk++; if (!first) first = y.label; last = y.label;
+    Object.keys(day).forEach(k => { if (!(k in fact)) fact[k] = day[k]; });
+  }
+  const map = Object.assign({}, site, fact);
+  const factGoods = Object.keys(fact).filter(k => !/^\d+$/.test(k)).length;
+  map.__note = daysOk
+    ? 'факт цена покупателя, последний день с продажами за ' + last + '–' + first +
+      ' (' + factGoods + ' артикулов); без продаж за период — цена на сайте'
+    : 'отчёты о реализации не получены, везде цена на сайте';
+  return map;
+}
+
+function cpOzonFactPrices_(y) {
+  const h = cpOzonHeaders_();
+  const r = cpHttp_('https://api-seller.ozon.ru/v1/finance/realization/by-day', {
+    method: 'post', headers: h, body: { day: y.day, month: y.month, year: y.year },
+  });
+  const sum = {}, qty = {}, skuOf = {};
+  (r.rows || []).forEach(row => {
+    const dc = row.delivery_commission;
+    const it = row.item || {};
+    if (!dc || !it.offer_id || !(dc.quantity > 0) || !(dc.price_per_instance > 0)) return;
+    sum[it.offer_id] = (sum[it.offer_id] || 0) + dc.price_per_instance * dc.quantity;
+    qty[it.offer_id] = (qty[it.offer_id] || 0) + dc.quantity;
+    if (it.sku) skuOf[it.offer_id] = it.sku;
+  });
+  const map = {};
+  Object.keys(sum).forEach(o => {
+    const avg = sum[o] / qty[o];
+    cpAddPrice_(map, o, avg);
+    if (skuOf[o]) cpAddPrice_(map, skuOf[o], avg);
+  });
+  // product_id и все SKU товара — чтобы строку нашло по любому артикулу Озона.
+  const offers = Object.keys(sum);
+  for (let i = 0; i < offers.length; i += 1000) {
+    let info;
+    try {
+      info = cpHttp_('https://api-seller.ozon.ru/v3/product/info/list', {
+        method: 'post', headers: h, body: { offer_id: offers.slice(i, i + 1000) },
+      });
+    } catch (e) { break; }
+    (info.items || []).forEach(it => {
+      const avg = map[cpNormKey_(it.offer_id)];
+      if (!avg) return;
+      cpAddPrice_(map, it.id, avg);
+      (it.sources || []).forEach(s => s.sku && cpAddPrice_(map, s.sku, avg));
     });
   }
   return map;
@@ -356,6 +488,9 @@ function cpYMPrices_() {
       (res.offerMappings || []).forEach(m => {
         const id = m.offer && m.offer.offerId;
         const sku = m.mapping && m.mapping.marketSku;
+        // Нет цены в магазинах — берём базовую цену кабинета.
+        const bp = m.offer && m.offer.basicPrice && m.offer.basicPrice.value;
+        if (id && !byOffer[id] && bp) { byOffer[id] = bp; cpAddPrice_(map, id, bp); }
         if (id && sku && byOffer[id]) cpAddPrice_(map, sku, byOffer[id]);
       });
       token = res.paging && res.paging.nextPageToken;
@@ -434,10 +569,12 @@ function cpDiagnose() {
   let out;
   try {
     if (mp.startsWith('o')) {
-      out = cpHttp_('https://api-seller.ozon.ru/v5/product/info/prices', {
-        method: 'post', headers: cpOzonHeaders_(),
-        body: { cursor: '', filter: { offer_id: [art], visibility: 'ALL' }, limit: 10 },
-      });
+      const oz = cpOzonPrices_();
+      out = { offer_id: art, 'цена на сайте (как пишет скрипт)': oz[cpNormKey_(art)] || 'не найдено',
+        prices: cpHttp_('https://api-seller.ozon.ru/v5/product/info/prices', {
+          method: 'post', headers: cpOzonHeaders_(),
+          body: { cursor: '', filter: { offer_id: [art], visibility: 'ALL' }, limit: 10 },
+        }) };
     } else if (mp.startsWith('y')) {
       const h = cpYMHeaders_();
       const c = cpYMCampaigns_(h)[0];
