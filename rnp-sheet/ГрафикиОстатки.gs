@@ -40,8 +40,12 @@ function rnpAddMenu() {
     .addItem('📈 График товара', 'rnpOpenChart')
     .addItem('📦 Остатки', 'rnpOpenStocks')
     .addSeparator()
+    .addItem('💰 Обновить прибыль из TrueStats (7 дней)', 'rnpProfitUpdateUi')
+    .addItem('📦 Снимок остатков сейчас', 'rnpSnapshotUi')
+    .addItem('⏰ Включить авторасписание', 'rnpInstallTrigger')
+    .addSeparator()
     .addItem('Ключи Ozon для остатков', 'rnpSetKeys')
-    .addItem('Включить ежедневный снимок остатков', 'rnpInstallTrigger')
+    .addItem('Ключ TrueStats для прибыли', 'rnpSetTsKey')
     .addToUi();
 }
 
@@ -462,19 +466,139 @@ function rnpStocksData(art, from, to) {
   };
 }
 
-/** Поставить ежедневный снимок остатков (06:00) — один раз. */
+/** Авторасписание: снимок остатков 06:00, прибыль из TrueStats 08:00 и 13:00 (МСК). */
 function rnpInstallTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'rnpSnapshot') ScriptApp.deleteTrigger(t);
+    var f = t.getHandlerFunction();
+    if (f === 'rnpSnapshot' || f === 'rnpProfitUpdate') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('rnpSnapshot').timeBased().everyDays(1).atHour(6).inTimezone('Europe/Moscow').create();
+  ScriptApp.newTrigger('rnpProfitUpdate').timeBased().everyDays(1).atHour(8).inTimezone('Europe/Moscow').create();
+  ScriptApp.newTrigger('rnpProfitUpdate').timeBased().everyDays(1).atHour(13).inTimezone('Europe/Moscow').create();
+  var ui = SpreadsheetApp.getUi(), msg = ['Расписание включено: снимок остатков в 6:00, прибыль из TrueStats в 8:00 и 13:00 МСК.'];
+  try { rnpSnapshot(); msg.push('Снимок остатков сделан.'); } catch (e) { msg.push('Снимок остатков не получился: ' + e.message); }
+  try { msg.push(rnpProfitUpdate()); } catch (e) { msg.push('Прибыль не обновилась: ' + e.message); }
+  ui.alert(msg.join('\n'));
+}
+
+function rnpSnapshotUi() {
   var ui = SpreadsheetApp.getUi();
-  try {
-    rnpSnapshot();
-    ui.alert('Готово. Снимок остатков сделан сейчас и дальше будет делаться каждый день в 6:00 МСК (лист «API Остатки кластеры»).');
-  } catch (e) {
-    ui.alert('Расписание поставлено, но первый снимок не получился: ' + e.message);
+  try { rnpSnapshot(); ui.alert('Снимок остатков сделан (лист «' + RNP.SNAP_SHEET + '»).'); }
+  catch (e) { ui.alert('Не получилось: ' + e.message); }
+}
+
+/* ===================== ПРИБЫЛЬ ИЗ TRUESTATS ===================== */
+
+var RNP_TS = {
+  URL: 'https://api.truestats.ru/reporting/main/products',
+  KEYS: ['TRUESTATS_TOKEN', 'TRUESTATS_API_TOKEN', 'TS_TOKEN', 'truestatsToken', 'TRUESTATS_KEY'],
+  METRIC: 'Чистая прибыль на 1 шт., ₽',
+  DAYS: 7
+};
+
+function rnpTsKey_() {
+  var p = PropertiesService.getScriptProperties().getProperties();
+  var d = PropertiesService.getDocumentProperties().getProperties();
+  for (var i = 0; i < RNP_TS.KEYS.length; i++) {
+    var k = RNP_TS.KEYS[i];
+    if (p[k]) return String(p[k]).trim();
+    if (d[k]) return String(d[k]).trim();
   }
+  return '';
+}
+
+function rnpSetTsKey() {
+  var ui = SpreadsheetApp.getUi();
+  var a = ui.prompt('TrueStats API', 'Токен API (кабинет TrueStats → раздел API):', ui.ButtonSet.OK_CANCEL);
+  if (a.getSelectedButton() !== ui.Button.OK) return;
+  PropertiesService.getScriptProperties().setProperty('TRUESTATS_TOKEN', a.getResponseText().trim());
+  ui.alert('Сохранено в свойствах скрипта. В таблицу токен не записан.');
+}
+
+/** Прибыль на 1 шт. по артикулам Ozon за один день: {vendorCode: число} */
+function rnpTsProfitDay_(day, token) {
+  var out = {}, page = 1, total = 1e9;
+  while ((page - 1) * 500 < total && page <= 10) {
+    var body = {dateFrom: day, dateTo: day, filters: {accountTypes: [1]}, limit: 500, page: page,
+      columns: ['profit', 'salesCount', 'averageProfitPerPiece']};
+    var r = null;
+    for (var attempt = 0; attempt < 4; attempt++) {
+      try {
+        r = UrlFetchApp.fetch(RNP_TS.URL, {method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+          headers: {'X-Api-Token': token}, payload: JSON.stringify(body)});
+      } catch (e) { r = null; }
+      if (r && r.getResponseCode() === 200 && r.getContentText()) break;
+      if (r && r.getResponseCode() === 401) throw new Error('TrueStats: неверный токен (401)');
+      Utilities.sleep(3000 * (attempt + 1));
+    }
+    if (!r || r.getResponseCode() !== 200) throw new Error('TrueStats не ответил за ' + day);
+    var j = JSON.parse(r.getContentText());
+    total = (j.pagination && j.pagination.total) || j.total || 0;
+    (j.byProduct || []).forEach(function (x) {
+      var v = x.vendorCode, n = Number(x.salesCount) || 0;
+      if (!v || !n) return;
+      var per = x.averageProfitPerPiece !== undefined && x.averageProfitPerPiece !== null ? Number(x.averageProfitPerPiece) : Number(x.profit) / n;
+      if (!isNaN(per)) out[String(v).trim()] = Math.round(per);
+    });
+    page++;
+  }
+  return out;
+}
+
+/**
+ * Записывает «Чистая прибыль на 1 шт., ₽» на лист РНП за последние 7 дней (до вчера включительно).
+ * Перезаписывает эти 7 дней каждый раз: TrueStats дозагружает и уточняет данные с опозданием.
+ * Дни, где у артикула не было продаж, не трогает.
+ */
+function rnpProfitUpdate() {
+  var token = rnpTsKey_();
+  if (!token) throw new Error('Нет токена TrueStats. Меню «📈 Графики» → «Ключ TrueStats для прибыли».');
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(30000)) return 'Прибыль: уже идёт другое обновление, пропускаю.';
+  try {
+    var sh = SpreadsheetApp.getActive().getSheetByName(RNP.SHEET);
+    var lastCol = sh.getLastColumn(), last = sh.getLastRow();
+    var dates = rnpHeaderDates_(sh.getRange(1, 5, 1, lastCol - 4).getDisplayValues()[0]);
+    var today = new Date(), days = [];
+    for (var i = RNP_TS.DAYS; i >= 1; i--) days.push(rnpIso_(new Date(today.getTime() - i * 864e5)));
+    days = days.filter(function (d) { return dates.indexOf(d) >= 0; });
+    if (!days.length) return 'Прибыль: на листе РНП нет колонок за последние 7 дней.';
+    var cols = days.map(function (d) { return 5 + dates.indexOf(d); });
+    var c0 = Math.min.apply(null, cols), c1 = Math.max.apply(null, cols);
+
+    var data = {}, empty = [];
+    days.forEach(function (d) {
+      data[d] = rnpTsProfitDay_(d, token);
+      if (!Object.keys(data[d]).length) empty.push(d);
+    });
+
+    var ad = sh.getRange(2, 1, last - 1, 4).getValues();
+    var cur = '', written = 0, rows = 0;
+    for (var r = 0; r < ad.length; r++) {
+      if (String(ad[r][0]).trim()) cur = String(ad[r][0]).trim();
+      if (String(ad[r][3]).trim() !== RNP_TS.METRIC || !cur) continue;
+      var rng = sh.getRange(r + 2, c0, 1, c1 - c0 + 1);
+      var vals = rng.getValues()[0], changed = false;
+      days.forEach(function (d, k) {
+        var v = data[d][cur];
+        if (v === undefined) return;
+        var at = cols[k] - c0;
+        if (vals[at] !== v) { vals[at] = v; changed = true; written++; }
+      });
+      if (changed) { rng.setValues([vals]); rows++; }
+    }
+    var msg = 'Прибыль из TrueStats: ' + days[0] + ' – ' + days[days.length - 1] + ', обновлено ячеек: ' + written + ' (артикулов: ' + rows + ').';
+    if (empty.length) msg += ' Нет данных в TrueStats за: ' + empty.join(', ') + ' — подтянется при следующем запуске.';
+    PropertiesService.getDocumentProperties().setProperty('rnp_profit_last', new Date().toISOString() + ' ' + msg);
+    return msg;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function rnpProfitUpdateUi() {
+  var ui = SpreadsheetApp.getUi();
+  try { ui.alert(rnpProfitUpdate()); } catch (e) { ui.alert('Не получилось: ' + e.message); }
 }
 
 /* ===================== HTML ===================== */
@@ -642,7 +766,7 @@ function cellColor(v,max){if(v===null||v===undefined)return 'background:#0c2150;
  var l=88-t*45;return 'background:hsl(217,70%,'+l+'%);color:'+(l<60?'#fff':'#0b1d45')}
 function stockHeat(h,live,extraNote){h=h||{dates:[],clusters:{},fbs:[]};var dates=h.dates.slice(),cl={};Object.keys(h.clusters||{}).forEach(function(k){cl[k]=h.clusters[k].slice()});var fbs=(h.fbs||[]).slice();
  if(live&&dates.indexOf(live.date)<0){dates.push(live.date);Object.keys(cl).forEach(function(k){cl[k].push(null)});Object.keys(live.clusters||{}).forEach(function(k){if(!cl[k])cl[k]=dates.map(function(){return null});cl[k][dates.length-1]=live.clusters[k].q});fbs.push(live.fbs)}
- if(!dates.length)return '<div class="note">История по кластерам появится после включения ежедневного снимка: меню «📈 Графики» → «Включить ежедневный снимок остатков». FBO всего по дням — на графике выше (линия «Остаток FBO»).</div>';
+ if(!dates.length)return '<div class="note">История по кластерам появится после включения ежедневного снимка: меню «📈 Графики» → «⏰ Включить авторасписание» (или «📦 Снимок остатков сейчас»). FBO всего по дням — на графике выше (линия «Остаток FBO»).</div>';
  var names=Object.keys(cl).filter(function(k){return cl[k].some(function(v){return v>0})});
  names.sort(function(a,b){return (cl[b][cl[b].length-1]||0)-(cl[a][cl[a].length-1]||0)});
  var max=0;names.forEach(function(k){cl[k].forEach(function(v){if(v>max)max=v})});
