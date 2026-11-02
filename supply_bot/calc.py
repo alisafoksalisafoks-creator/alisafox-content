@@ -470,6 +470,11 @@ def build(snap, overrides=None):
     for key, group in groups.items():
         ff = ms_by[key]
         _fit(group, ff["free"], cl_sales)
+        for ln in group:   # после урезания под наш склад меньше минимума — не везём
+            if not ln.manual and 0 < ln.qty < config.MIN_SHIP:
+                ln.flags.insert(0, f"не везём: на нашем складе осталось {ln.qty} шт для этого кластера — "
+                                   f"меньше минимума {config.MIN_SHIP} шт")
+                ln.qty, ln.boxes = 0, []
         ff["used"] = sum(ln.qty for ln in group)
         total = sum(ln.need for ln in group)
         if total > ff["free"]:

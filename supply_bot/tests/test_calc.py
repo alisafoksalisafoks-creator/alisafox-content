@@ -272,3 +272,11 @@ def test_empty_ozon_stock_gets_nearest_full_box():
              units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("A", 100), ("B", 40)]})
     ln = calc.build(s).lines[0]
     assert ln.need == 18 and ln.qty == 40 and ln.boxes == [("B", 40, 1)]
+
+
+def test_ff_leftover_below_minimum_not_shipped():
+    # Невинномысск 02.11, OZ522-HB1B: нужно 24, на нашем складе 2 шт — меньше минимума 30, не везём
+    s = snap(sales("OZ1", KZN, 1, days=10), stocks=[("OZ1", KZN, 12, 0)], ms={"OZ1": 2},
+             units={"OZ1": unit("OZ1")})
+    plan = calc.build(s)
+    assert not plan.lines and "меньше минимума 30" in plan.small[0]["why"]
