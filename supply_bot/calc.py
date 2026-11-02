@@ -394,6 +394,9 @@ def build(snap, overrides=None):
     for (offer, _wh), ln in lines.items():
         if ln.need > 0:
             groups[eligible[offer]["key"]].append(ln)
+    cl_sales = defaultdict(float)   # продажи всего магазина по кластеру — очередь кластеров после Казани
+    for (_o, cl), v in s14c.items():
+        cl_sales[cl] += v
     for key, group in groups.items():
         ff = ms_by[key]
         total = sum(ln.need for ln in group)
@@ -401,7 +404,7 @@ def build(snap, overrides=None):
             for ln in group:
                 ln.qty = ln.need
         else:
-            _level(group, ff["free"])
+            _level(group, ff["free"], cl_sales)
             plan.purchase.append({"root": ff["article"], "need": total, "free": ff["free"], "short": total - ff["free"]})
 
     # --- ручные поправки на склад, которого нет в расчёте ---
@@ -451,15 +454,14 @@ def build(snap, overrides=None):
     # --- итоговая проверка: не больше свободного остатка ---
     for key, group in groups.items():
         ff = ms_by[key]
-        _fit(group, ff["free"])
+        _fit(group, ff["free"], cl_sales)
         ff["used"] = sum(ln.qty for ln in group)
         total = sum(ln.need for ln in group)
         if total > ff["free"]:
             for ln in group:
-                where = (f"приоритетный кластер (запас {config.PRIORITY_DAYS} дн, затем остаток)" if ln.main
-                         else f"запас {config.OTHER_DAYS} дн")
                 ln.flags.insert(0, f"не хватает ФФ: потребность всех кластеров {total} шт больше свободного на ФФ "
-                                   f"{ff['free']} шт — сюда {ln.qty} из {ln.need}, {where}")
+                                   f"{ff['free']} шт — сюда {ln.qty} из {ln.need}; очередь: СПб и Москва, Ростов, Казань, "
+                                   "дальше по продажам кластера")
         for ln in group:
             if ln.manual and ln.qty > ln.need + ln.speed * config.ROUND_UP_EXTRA_DAYS and ln.speed:
                 ln.flags.append(f"запас после поставки {(ln.have + ln.qty) / ln.speed - ln.lead:.0f} дн — больше {config.TARGET_DAYS - ln.lead}")
@@ -596,41 +598,41 @@ def _sizes(offer, root, boxes):
     return []
 
 
-def _level(group, free):
-    """Нашего товара не хватает на все кластеры (решение владельца 26.10.2026).
+def _order(ln, cl_sales):
+    """Ключ очереди кластера: сначала СПб и Москва, затем Ростов, Казань, затем остальные по продажам магазина."""
+    return (config.cluster_tier(ln.cluster), -cl_sales.get(ln.cluster, 0))
 
-    Приоритетные кластеры — где артикул продаётся больше всего: по убыванию продаж, пока вместе не наберут
-    PRIORITY_SHARE продаж артикула (главный — всегда). Раздаём по очереди, пока есть товар:
-    1) приоритетным — запас на PRIORITY_DAYS дней; 2) остальным — на OTHER_DAYS дней;
-    3) остаток — кластерам по убыванию продаж до полной потребности.
+
+def _level(group, free, cl_sales):
+    """Нашего товара не хватает на все кластеры (решение владельца 02.11.2026).
+
+    Раздаём полную потребность по очереди кластеров: СПб и Москва, затем Ростов, затем Казань, затем остальные
+    по убыванию продаж кластера. Если на СПб и Москву вместе не хватает — делим между ними пропорционально потребности.
     """
-    order = sorted(group, key=lambda x: -x.speed)
-    total_speed = sum(ln.speed for ln in order) or 1
-    prio, acc = set(), 0.0
-    for ln in order:
-        if acc >= config.PRIORITY_SHARE * total_speed:
-            break
-        prio.add(id(ln))
-        acc += ln.speed
     for ln in group:
         ln.qty = 0
-        ln.main = id(ln) in prio
+        ln.main = config.cluster_tier(ln.cluster) == 0
     rest = free
-    steps = [(True, config.PRIORITY_DAYS), (False, config.OTHER_DAYS)]
-    for is_prio, days in steps:
-        for ln in order:
-            if ln.main != is_prio or not ln.speed:
-                continue
-            add = min(rest, ln.need - ln.qty, max(0, int(ln.speed * days - ln.have) - ln.qty))
-            ln.qty += add
-            rest -= add
-    for ln in order:
-        add = min(rest, ln.need - ln.qty)
-        ln.qty += add
-        rest -= add
+    tiers = defaultdict(list)
+    for ln in group:
+        tiers[config.cluster_tier(ln.cluster) if ln.main else (config.cluster_tier(ln.cluster), ln.cluster)].append(ln)
+    for key in sorted(tiers, key=lambda k: _order(tiers[k][0], cl_sales)):
+        lns = tiers[key]
+        need = sum(ln.need for ln in lns)
+        if need <= rest:
+            for ln in lns:
+                ln.qty = ln.need
+            rest -= need
+            continue
+        for ln in lns:
+            ln.qty = int(rest * ln.need / need)
+        left = rest - sum(ln.qty for ln in lns)
+        for ln in sorted(lns, key=lambda x: -x.need)[:left]:
+            ln.qty += 1
+        break
 
 
-def _fit(group, free):
+def _fit(group, free, cl_sales):
     """Если после округления до коробов вышли за свободный остаток — снимаем короба с самых обеспеченных складов."""
     while sum(ln.qty for ln in group) > free:
         cand = [ln for ln in group if ln.boxes]
@@ -639,8 +641,8 @@ def _fit(group, free):
             ln = max(group, key=lambda x: x.qty)
             ln.qty = max(0, ln.qty - over)
             continue
-        # снимаем с кластера, где артикул продаётся меньше всего (главный регион — последним), среди равных — с самого обеспеченного
-        ln = min(cand, key=lambda x: (x.speed, -((x.have + x.qty) / x.speed if x.speed else 1e9), _prio_rank(x.priority)))
+        # снимаем с кластера, который в очереди последний (СПб и Москва — последними), среди равных — с самого обеспеченного
+        ln = max(cand, key=lambda x: (_order(x, cl_sales), (x.have + x.qty) / x.speed if x.speed else 1e9))
         name, s, k = min(ln.boxes, key=lambda b: b[1])
         ln.boxes = [(n, sz, c - 1 if (n, sz) == (name, s) else c) for n, sz, c in ln.boxes]
         ln.boxes = [b for b in ln.boxes if b[2] > 0]
