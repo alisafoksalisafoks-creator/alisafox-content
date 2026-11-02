@@ -443,6 +443,15 @@ def build(snap, overrides=None):
         # логика владельца (02.11.2026): короб рядом — ровно короб; иначе круглое число, не меньше 30 шт
         raw = ln.qty
         q, box = config.round_qty(raw, [sz for _, sz in sizes])
+        bigger = sorted(sz for _, sz in sizes if sz >= raw)
+        if ln.have <= 0 and bigger:   # на Ozon 0 — ближайший полный короб (решение владельца 02.11.2026)
+            q, box = bigger[0], bigger[0]
+        d0 = ln.sales14 / config.SALES_DAYS if ln.sales14 else 0
+        if d0 and ln.have > 0 and (ln.have + q) / d0 > config.SKIP_AFTER_DAYS:
+            ln.flags.append(f"не везём: нужно {raw}, но {q} шт дали бы запас {(ln.have + q) / d0:.0f} дн "
+                            f"(больше {config.SKIP_AFTER_DAYS})")
+            ln.qty, ln.boxes = 0, []
+            continue
         ln.qty = q
         small = min((sz for _, sz in sizes), default=0)
         if box:
@@ -519,7 +528,10 @@ def build(snap, overrides=None):
     plan.small = [{"offer": ln.offer, "warehouse": ln.warehouse, "need": ln.need, "speed": ln.speed,
                    "box": min((sz for _, sz in _sizes(norm(ln.offer), ln.root, snap.boxes)), default=None),
                    "priority": ln.priority,
-                   "why": f"меньше {config.PARTIAL_MIN} шт — неполным коробом не везём" if 0 < ln.need < config.PARTIAL_MIN
+                   "why": next((f for f in ln.flags if f.startswith("не везём:")), None)
+                   or "не хватило нашего склада" if any(x["root"] == ms_by[eligible[norm(ln.offer)]["key"]]["article"]
+                                                        for x in plan.purchase) and not any(f.startswith("не везём:") for f in ln.flags)
+                   else next((f for f in ln.flags if f.startswith("не везём:")), None) if any(f.startswith("не везём:") for f in ln.flags)
                    else "не хватило нашего склада" if any(x["root"] == ms_by[eligible[norm(ln.offer)]["key"]]["article"]
                                                              for x in plan.purchase) else "меньше полного короба"}
                   for ln in lines.values() if ln.need > 0 and ln.qty == 0 and not ln.manual]

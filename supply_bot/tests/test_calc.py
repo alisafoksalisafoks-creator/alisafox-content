@@ -253,9 +253,22 @@ def test_round_qty_owner_rules():
     assert config.round_qty(11, [100, 40]) == (30, None)                # минимум 30
 
 
-def test_slow_item_big_box_is_orange():
-    # 5 шт за 14 дн, на Ozon 8 → нужно 10 → минимум 30 → после поставки 106 дн > 60 — оранжевый, решает владелец
-    s = snap(sales("OZ1", MSK1, 1, days=5), stocks=[("OZ1", MSK1, 8, 0)], ms={"OZ1": 1000},
+def test_slow_item_orange_and_skip_over_80_days():
+    # 9 шт за 14 дн, на Ozon 10 → нужно 23 → минимум 30 → после поставки 62 дн > 60 — оранжевый, решает владелец
+    s = snap(sales("OZ1", MSK1, 1, days=9), stocks=[("OZ1", MSK1, 10, 0)], ms={"OZ1": 1000},
              units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("40×30×30", 100)]})
     ln = calc.build(s).lines[0]
     assert ln.qty == 30 and ln.warn == "короб" and any("больше 60" in f for f in ln.flags)
+    # 5 шт за 14 дн, на Ozon 8 → 30 шт дали бы 106 дн > 80 — не везём
+    s = snap(sales("OZ1", MSK1, 1, days=5), stocks=[("OZ1", MSK1, 8, 0)], ms={"OZ1": 1000},
+             units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("40×30×30", 100)]})
+    plan = calc.build(s)
+    assert not plan.lines and "не везём" in plan.small[0]["why"] and "больше 80" in plan.small[0]["why"]
+
+
+def test_empty_ozon_stock_gets_nearest_full_box():
+    # на Ozon 0, 5 шт за 14 дн → нужно 18, короба 40 и 100 → полный короб 40; правило 80 дн не действует — товар должен быть
+    s = snap(sales("OZ1", MSK1, 1, days=5), ms={"OZ1": 1000},
+             units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("A", 100), ("B", 40)]})
+    ln = calc.build(s).lines[0]
+    assert ln.need == 18 and ln.qty == 40 and ln.boxes == [("B", 40, 1)]
