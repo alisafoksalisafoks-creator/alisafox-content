@@ -14,6 +14,17 @@ STOP_FILL = PatternFill("solid", fgColor="EDEDED")
 STOP_FONT = Font(color="808080")
 DEMAND_FILL = {"опт": PatternFill("solid", fgColor="FFD8A8"), "всплеск": PatternFill("solid", fgColor="FFD8A8"),
                "рост": PatternFill("solid", fgColor="C6EFCE")}   # опт и всплеск — оранжевый, рост спроса — зелёный
+WARN_FILL = {"платное": PatternFill("solid", fgColor="FFC7CE"),   # платное хранение — красный
+             "выкуп": PatternFill("solid", fgColor="E4DFEC")}     # выкуп ниже 85% — сиреневый
+
+
+def _fill(ln, partial=False):
+    """Цвет строки: платное > выкуп > неполный короб > опт/всплеск/рост."""
+    if ln.warn:
+        return WARN_FILL[ln.warn]
+    if partial:
+        return PARTIAL_FILL
+    return DEMAND_FILL.get(ln.demand)
 
 
 def _paint(ws, fill):
@@ -50,15 +61,14 @@ def _distribution(wb, plan, groups):
             if ln.boxes:
                 for name, s, k in ln.boxes:
                     ws.append([wh, ln.cluster, ln.ship_to, ln.offer, s * k, name, s, k, plan.ship_date, ln.priority, "; ".join(ln.flags)])
-                    if name.startswith(PARTIAL):  # неполный короб — вся строка жёлтая
-                        _paint(ws, PARTIAL_FILL)
-                    elif ln.demand:
-                        _paint(ws, DEMAND_FILL[ln.demand])
+                    fill = _fill(ln, name.startswith(PARTIAL))  # неполный короб — вся строка жёлтая
+                    if fill:
+                        _paint(ws, fill)
             else:
                 ws.append([wh, ln.cluster, ln.ship_to, ln.offer, ln.qty, "нет кванта", None, None, plan.ship_date, ln.priority,
                            "; ".join(ln.flags)])
-                if ln.demand:
-                    _paint(ws, DEMAND_FILL[ln.demand])
+                if _fill(ln):
+                    _paint(ws, _fill(ln))
         row = [f"Итого {wh}", "", "", f"{len(lines)} арт.", sum(x.qty for x in lines), "", "",
                sum(x.box_count for x in lines), "", "", ""]
         ws.append(row)
@@ -85,9 +95,9 @@ def _need(wb, lines, title="Потребность по направлениям
              ln.qty, ln.box_count, _boxes(ln), ln.priority, "; ".join(ln.flags)] for ln in lines],
            [28, 24, 26, 9, 9, 8, 9, 9, 8, 9, 8, 10, 10, 8, 34, 10, 44])
     for i, ln in enumerate(lines, 2):
-        if ln.demand:
+        if _fill(ln):
             for c in ws[i]:
-                c.fill = DEMAND_FILL[ln.demand]
+                c.fill = _fill(ln)
 
 
 def build_direction(plan, name, path, snap_time=""):

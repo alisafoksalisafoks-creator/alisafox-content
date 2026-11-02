@@ -54,6 +54,7 @@ class Line:
     ship_to: str = ""         # склад приёмки — подсказка: наш основной склад кластера
     demand: str = ""          # «опт», «всплеск» или «рост» — строку подсвечиваем
     main: bool = False        # приоритетный кластер артикула при нехватке нашего склада
+    warn: str = ""            # «платное» (красный) или «выкуп» (сиреневый) — грузим, но подсвечиваем
 
     @property
     def have(self):
@@ -317,17 +318,17 @@ def build(snap, overrides=None):
         if u.get("rating") and 0 < u["rating"] < config.RATING_MIN:
             plan.decide.append({**info, "reason": f"рейтинг {u['rating']:.1f} < {config.RATING_MIN}"})
             continue
+        # выкуп ниже 85% и платное хранение — грузим, но подсвечиваем (решение владельца 02.11.2026)
+        warn = None
         if u.get("buyout") is not None and u["buyout"] < config.BUYOUT_MIN and tot14 > 0:
-            plan.decide.append({**info, "reason": f"выкуп {u['buyout']:.0%} < 85% — с товаром что-то не так, возможно, пока не везти"})
-            continue
+            warn = ("выкуп", f"выкуп {u['buyout']:.0%} < 85% — проверьте товар")
         paid = [p for p in snap.paid.get(offer, []) if (p["date"] - today).days <= config.PAID_SOON_DAYS]
         if paid:
             p = min(paid, key=lambda x: x["date"])
             left = (p["date"] - today).days
-            when = "уже платное" if left <= 0 else f"платное с {p['date']:%d.%m} (через {left} дн)"
+            when = "уже платное хранение" if left <= 0 else f"платное хранение с {p['date']:%d.%m} (через {left} дн)"
             plan.paid.append({"offer": name, "qty": p["qty"], "date": p["date"], "days": left})
-            plan.decide.append({**info, "reason": f"не отгружать: {when}, {p['qty']} шт"})
-            continue
+            warn = ("платное", f"{when}, {p['qty']} шт" + (f"; {warn[1]}" if warn else ""))
         key = _ms_key(offer, snap.unit, ms_by)
         if not key or ms_by[key]["free"] <= 0:
             if tot14:
@@ -340,7 +341,7 @@ def build(snap, overrides=None):
         k_next = season_k(snap, u.get("category"), month % 12 + 1)
         if k < config.SEASON_LOW or (k and k_next < k * (1 - config.SEASON_DROP)):
             plan.season_notes.append({"offer": name, "category": u.get("category"), "k": k, "k_next": k_next})
-        eligible[offer] = {"u": u, "k": k, "key": key, "name": name}
+        eligible[offer] = {"u": u, "k": k, "key": key, "name": name, "warn": warn}
 
     # --- направления: кластер целиком, в Москве — основные склады ---
     s14c, s30c, stock_c = defaultdict(float), defaultdict(int), {}
@@ -370,6 +371,9 @@ def build(snap, overrides=None):
             offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
             sales14=round(s14c.get((offer, cl), 0)), sales30=s30c.get((offer, cl), 0), speed=speed,
             available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"])
+        if e.get("warn"):
+            lines[(offer, cl)].warn = e["warn"][0]
+            lines[(offer, cl)].flags.append(e["warn"][1])
 
     for (offer, _cl), ln in lines.items():
         if offer in demand:

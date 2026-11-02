@@ -85,11 +85,12 @@ def test_statuses_buyout_and_paid_storage():
     post = sum((sales(o, MSK1, 5) for o in units), [])
     plan = calc.build(snap(post, ms={o: 1000 for o in units}, units=units, paid=paid))
     reasons = {x["offer"]: x["reason"] for x in plan.decide}
-    assert not plan.lines
+    by = {ln.offer: ln for ln in plan.lines}
+    assert set(by) == {"OZ3", "OZ4"}                  # выкуп < 85% и платное — грузим (решение 02.11.2026)
     assert "OZ1" not in reasons                       # «не грузим» — молча не везём
     assert "новинка" in reasons["OZ2"]
-    assert "85%" in reasons["OZ3"]
-    assert "не отгружать" in reasons["OZ4"] and plan.paid[0]["days"] == 10
+    assert by["OZ3"].warn == "выкуп" and "85%" in by["OZ3"].flags[0]
+    assert by["OZ4"].warn == "платное" and "платное хранение с" in by["OZ4"].flags[0] and plan.paid[0]["days"] == 10
 
 
 def test_empty_cluster_signal():

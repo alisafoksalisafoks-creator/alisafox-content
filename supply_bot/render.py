@@ -8,6 +8,7 @@ from .sources.sheets import norm, root_of
 LIMIT = 3800
 ICON = {"срочно": "🔴", "наверх": "🟡", "обычно": "⚪"}
 DEMAND_ICON = {"опт": "🟧 ", "всплеск": "🟧 ", "рост": "📈 "}
+WARN_ICON = {"платное": "🟥 ", "выкуп": "🟪 "}
 
 
 def fmt(n):
@@ -55,7 +56,7 @@ def summary(plan, taken_at=""):
     if plan.decide:
         lines.append(f"Решить / стоп: {len(plan.decide)} арт.")
     if plan.paid:
-        lines.append(f"Платное хранение ≤ 28 дн: {len(plan.paid)} арт. — не отгружаем.")
+        lines.append(f"🟥 Платное хранение ≤ 28 дн: {len(plan.paid)} арт. — грузим, строки красные.")
     if plan.demand_notes:
         n = {k: sum(1 for x in plan.demand_notes if x["kind"] == k) for k in ("опт", "всплеск", "рост")}
         if n["опт"] or n["всплеск"]:
@@ -97,7 +98,7 @@ def warehouse(plan, name):
         days = f"{ln.days:.0f} дн" if ln.days is not None else "—"
         flag = (" · " + escape("; ".join(ln.flags))) if ln.flags else ""
         part = "🟨 " if any(n.startswith("неполный") for n, _, _ in ln.boxes) else ""
-        part += DEMAND_ICON.get(ln.demand, "")
+        part = WARN_ICON.get(ln.warn, "") + part + DEMAND_ICON.get(ln.demand, "")
         rows.append(f"{ICON[ln.priority]} {part}<code>{escape(ln.offer)}</code> — <b>{fmt(ln.qty)}</b> шт ({_boxes(ln)}) · "
                     f"{ln.speed:.1f}/дн, запас {days}{flag}\n"
                     f"   ({ln.sales14} шт за 14 дн × {config.STOCK_MULT:g} − {fmt(ln.have)} на Ozon) × {ln.season:g} = "
@@ -211,7 +212,7 @@ def decide(plan):
 def paid(plan):
     if not plan.paid:
         return ["В ближайшие 28 дней платного хранения нет."]
-    lines = ["<b>Платное хранение: не отгружаем</b>", ""]
+    lines = ["<b>Платное хранение: грузим, но в расчёте строки красные</b>", ""]
     for x in sorted(plan.paid, key=lambda x: x["days"]):
         when = "уже платное" if x["days"] <= 0 else f"с {x['date']:%d.%m}, через {x['days']} дн"
         lines.append(f"<code>{escape(x['offer'])}</code> — {fmt(x['qty'])} шт, {when}")
