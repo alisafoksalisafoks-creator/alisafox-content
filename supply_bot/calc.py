@@ -185,17 +185,20 @@ def pick_boxes(qty, sizes, cap):
 PARTIAL = "неполный короб"
 
 
-def pack(qty, sizes):
-    """Правило коробов (26.10.2026): полными коробами от большого к малому.
+def pack(qty, sizes, week=None):
+    """Правило коробов (26.10.2026, 02.11.2026): полными коробами от большого к малому.
 
     Сверх короба (что не влезло в полные короба) не меньше половины самого маленького короба — ещё один
     маленький короб, меньше — не везём. Потребность меньше половины самого маленького короба — неполный
-    короб, округлённый вверх до 10 шт. Возвращает ([(шт, коробов)], сверх короба не везём шт, шт в неполном).
+    короб, округлённый вверх до 10 шт. week — продажи кластера за 7 дней: добиваем вверх (до короба или
+    до 10 шт), только если лишнее продастся за неделю; иначе больше формулы не везём — хвост неполным
+    коробом вниз до 10 шт (02.11.2026). Возвращает ([(шт, коробов)], сверх короба не везём шт, шт в неполном).
     """
     sizes = sorted({s for _, s in sizes if s > 0}, reverse=True)
     if not sizes or qty <= 0:
         return [], 0, 0
     small = sizes[-1]
+    fits = (lambda extra: True) if week is None else (lambda extra: extra <= week)
     out, rem = {}, qty
     for s in sizes:
         if rem // s:
@@ -204,14 +207,17 @@ def pack(qty, sizes):
     if not out and rem * 2 < small:
         if rem < config.PARTIAL_MIN:  # меньше 5 шт неполным коробом не везём
             return [], rem, 0
-        part = min(-(-rem // 10) * 10, small)
+        up = min(-(-rem // 10) * 10, small)
+        part = up if fits(up - rem) else max(10, rem // 10 * 10)
         return ([(small, 1)], 0, 0) if part == small else ([], 0, part)
-    dropped = 0
     if rem and rem * 2 >= small:
-        out[small] = out.get(small, 0) + 1
-    else:
-        dropped = rem
-    return sorted(out.items(), key=lambda x: -x[0]), dropped, 0
+        if fits(small - rem):
+            out[small] = out.get(small, 0) + 1
+            return sorted(out.items(), key=lambda x: -x[0]), 0, 0
+        if not out:  # одного короба много, а полных нет — неполный короб вниз до 10 шт
+            return [], 0, max(10, rem // 10 * 10)
+        return sorted(out.items(), key=lambda x: -x[0]), rem, 0
+    return sorted(out.items(), key=lambda x: -x[0]), rem, 0
 
 
 def label_boxes(boxes, sizes):
@@ -438,9 +444,14 @@ def build(snap, overrides=None):
             down, up = pick_boxes(ln.qty, sizes, ln.qty), pick_boxes(ln.qty, sizes, 10 ** 9)
             boxes = min((up, down), key=lambda bx: abs(sum(s * k for s, k in bx) - ln.qty))
         else:
-            boxes, dropped, part = pack(ln.qty, sizes)
-            if dropped:
-                ln.flags.append(f"сверх короба {dropped} шт не везём (меньше половины короба {min(sz for _, sz in sizes)})")
+            week = ln.sales14 * 7 / config.SALES_DAYS
+            boxes, dropped, part = pack(ln.qty, sizes, week)
+            small = min(sz for _, sz in sizes)
+            if dropped and dropped * 2 >= small:
+                ln.flags.append(f"сверх короба {dropped} шт не везём: до полного короба не хватает {small - dropped} шт, "
+                                f"это больше продаж кластера за неделю ({week:.0f} шт)")
+            elif dropped:
+                ln.flags.append(f"сверх короба {dropped} шт не везём (меньше половины короба {small})")
             elif sum(sz * k for sz, k in boxes) > ln.qty:
                 ln.flags.append(f"сверх короба +{sum(sz * k for sz, k in boxes) - ln.qty} шт до полного короба")
             if part:
