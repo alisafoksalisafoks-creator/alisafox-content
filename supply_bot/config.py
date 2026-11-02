@@ -1,4 +1,5 @@
 """Правила расчёта поставок FBO. Цифры — решения владельца из ТЗ (24.10.2026)."""
+import math
 import os
 from pathlib import Path
 
@@ -6,8 +7,16 @@ DATA_DIR = Path(os.environ.get("SUPPLY_BOT_DATA", Path(__file__).parent / "data"
 
 SALES_DAYS = 14          # спрос = отгрузки FBO за 14 полных дней ÷ 14
 REF_DAYS = 30            # продажи за 30 дней — справочно и для выбора обязательных складов
-STOCK_MULT = 2.5         # формула «Заявки» владельца (02.11.2026): (продажи 14 дн × 2,5 − в пути − остаток Ozon) × коэф
-TARGET_DAYS = round(SALES_DAYS * STOCK_MULT)  # = 35 дней продаж — для подписей и ручных правок
+# Логика владельца (02.11.2026, выведена из её ручных расчётов по 7 кластерам, заменяет формулу «×2,5»):
+# запас на Ozon от 30 дней — не везём; меньше — довозим до 40 дн (хит, от 40 шт за 14 дн), 45 дн (20–39 шт), 50 дн (меньше 20).
+TRIGGER_DAYS = 30        # запас на Ozon (остаток + в пути) от 30 дней по продажам 14 дн — не везём
+HIT_SALES14 = 40         # хит — от 40 шт за 14 дней в кластере
+TARGET_HIT, TARGET_MID, TARGET_SLOW = 40, 45, 50
+MID_SALES14 = 20
+MIN_SHIP = 30            # меньше 30 шт в кластер не возим
+BOX_NEAR = 0.25          # короб из квантов в пределах 25% от нужного — везём ровно короб
+SLOW_MAX_DAYS = 60       # после поставки запаса больше 60 дней — оранжевая подсветка, решает владелец
+TARGET_DAYS = TARGET_MID  # для подписей и проверки ручных правок
 URGENT_HIT_DAYS = 14     # ходовой товар с запасом меньше 14 дней — наверх
 HIT_MIN_PER_DAY = 1.0    # «ходовой» — от 1 шт в день на складе
 ROUND_UP_EXTRA_DAYS = 3  # короб вверх, если запас не больше горизонта + 3 дней
@@ -67,9 +76,39 @@ BOX_NAMES = ("61×40×33", "43×29×35", "40×30×30", "31×23×19,5", "штат
 MS_STORE = os.environ.get("MS_STORE", "1. Основной склад")
 
 
-def need(sales14, have, k):
-    """Потребность кластера по формуле владельца: (продажи 14 дн × 2,5 − в пути − остаток Ozon) × коэф, не меньше 0."""
-    return max(0, round((sales14 * STOCK_MULT - have) * (k or 1)))
+def target_days(sales14):
+    """Сколько дней запаса держать после поставки: хиты 40, средние 45, медленные 50 (решение владельца 02.11.2026)."""
+    if sales14 >= HIT_SALES14:
+        return TARGET_HIT
+    return TARGET_MID if sales14 >= MID_SALES14 else TARGET_SLOW
+
+
+def need(sales14, have, k=None):
+    """Потребность кластера по логике владельца: запас от 30 дн — 0; иначе цель (40/45/50 дн) × скорость − (остаток + в пути).
+
+    Скорость = продажи 14 дн / 14. Коэффициент сезона в расчёт не входит (k оставлен для совместимости), как в её ручных расчётах."""
+    if sales14 <= 0:
+        return 0
+    speed = sales14 / SALES_DAYS
+    if have / speed >= TRIGGER_DAYS:
+        return 0
+    return max(1, math.ceil(target_days(sales14) * speed - have))
+
+
+def round_qty(qty, sizes):
+    """Округление по логике владельца: короб из квантов в пределах 25% — ровно короб; иначе до 100 шт — до 10,
+    больше — до 50; не меньше 30 шт. Возвращает (шт, размер короба или None)."""
+    if qty <= 0:
+        return 0, None
+    near = [s for s in sizes if s > 0 and abs(s - qty) <= max(5, BOX_NEAR * qty)]
+    if near:
+        best = min(near, key=lambda s: (abs(s - qty), -s))
+        return best, best
+    if qty <= 100:
+        q = int(round(qty / 10.0) * 10)
+    else:
+        q = int(round(qty / 50.0) * 50)
+    return max(MIN_SHIP, q), None
 
 
 def lead_days(cluster):

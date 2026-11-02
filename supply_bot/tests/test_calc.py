@@ -49,19 +49,19 @@ def test_need_per_warehouse_rounded_to_boxes_and_limited_by_our_stock():
     plan = calc.build(s)
     by = {ln.warehouse: ln for ln in plan.lines}
     msk = by["Москва, МО и Дальние регионы"]
-    # Москва — кластер: 140 шт за 14 дн × 2,5 − 50 = 300 → полные короба по 50
-    assert msk.need == 300 and msk.qty % 50 == 0 and msk.box_count == msk.qty // 50 and msk.ship_to == MSK1
-    # Казань — направление «кластер»: 28 шт × 2,5 − 10 = 60 → 50, только целые короба
-    assert by["Казань"].qty in (50, 100) and by["Казань"].ship_to == KZN
+    # Москва — хит (140 шт за 14 дн): запас 5 дн → до 40 дн: 400 − 50 = 350 → 7 коробов по 50
+    assert msk.need == 350 and msk.qty == 350 and msk.box_count == 7 and msk.ship_to == MSK1
+    # Казань: 28 шт за 14 дн → до 45 дн: 90 − 10 = 80 → 80 шт (короб 50 далеко)
+    assert by["Казань"].need == 80 and by["Казань"].qty == 80 and by["Казань"].ship_to == KZN
 
 
-def test_box_never_split_between_directions():
+def test_box_near_need_goes_as_exact_box():
+    # нужно 1000 (25 шт/дн × 40 дн), короб 900 в пределах 25% — везём ровно короб
     s = snap(sales("OZ1", MSK1, 25) + sales("OZ1", SPB, 25), ms={"OZ1": 10000},
-             units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("61×40×33", 600)]})
+             units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("61×40×33", 900)]})
     plan = calc.build(s)
     for ln in plan.lines:
-        assert all(size == 600 for _, size, _ in ln.boxes)
-        assert ln.qty % 600 == 0
+        assert ln.need == 1000 and ln.qty == 900 and ln.boxes == [("61×40×33", 900, 1)]
 
 
 def test_ff_shortage_goes_to_purchase_and_never_exceeds_free_stock():
@@ -135,7 +135,7 @@ def test_cluster_is_one_direction_outside_moscow():
     plan = calc.build(s)
     spb = [ln for ln in plan.lines if ln.cluster == "Санкт-Петербург и СЗО"]
     assert len(spb) == 1 and spb[0].warehouse == "Санкт-Петербург и СЗО" and spb[0].ship_to == SPB
-    assert spb[0].need == 10 * 35 - 40
+    assert spb[0].need == 10 * 40 - 40 and spb[0].qty == 350   # хит: до 40 дн, больше 100 — до 50
 
 
 def test_moscow_is_one_cluster():
@@ -143,7 +143,7 @@ def test_moscow_is_one_cluster():
              ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")})
     plan = calc.build(s)
     msk = [ln for ln in plan.lines if ln.cluster.startswith("Москва")]
-    assert len(msk) == 1 and msk[0].need == 8 * 35 - 100
+    assert len(msk) == 1 and msk[0].need == 8 * 40 - 100
 
 
 def test_order_only_profitable_items_missing_on_our_stock():
@@ -154,7 +154,7 @@ def test_order_only_profitable_items_missing_on_our_stock():
     plan = calc.build(s)
     got = {x["offer"]: x for x in plan.order}
     assert set(got) == {"OZ1", "OZ3"}                     # минусовой OZ2 не заказываем
-    assert got["OZ1"]["order"] == 5 * 35 and got["OZ3"]["order"] == 5 * 35 - got["OZ3"]["ship"]
+    assert got["OZ1"]["order"] == 5 * 40 and got["OZ3"]["order"] == 5 * 40 - got["OZ3"]["ship"]
     assert all(ln.offer != "OZ1" for ln in plan.lines)  # в распределении только то, что есть у нас
     why = {x["offer"]: x["why"] for x in plan.order_skipped}
     assert why["OZ2"] == "минусовой артикул" and why["OZ4"].startswith("прибыль не посчитать")
@@ -222,22 +222,40 @@ def test_wholesale_and_spikes():
 def test_shortage_cluster_order_spb_moscow_then_rostov_kazan():
     s = snap(sales("OZ1", MSK1, 20) + sales("OZ1", KZN, 10) + sales("OZ1", SPB, 5),
              stocks=[("OZ1", MSK1, 100, 0), ("OZ1", SPB, 50, 0)], ms={"OZ1": 600}, units={"OZ1": unit("OZ1")})
-    by = {ln.warehouse: ln.qty for ln in calc.build(s).lines}
-    # потребность: Москва 600, СПб 125, Казань 350; на ФФ 600 — СПб и Москва первыми,
-    # на обоих не хватает (725) — делим пропорционально потребности; Казани не остаётся
-    assert by == {"Москва, МО и Дальние регионы": 497, "Санкт-Петербург и СЗО": 103}
     plan = calc.build(s)
-    assert all("не хватает ФФ: потребность всех кластеров 1075 шт больше свободного на ФФ 600 шт" in ln.flags[0]
+    by = {ln.warehouse: ln.qty for ln in plan.lines}
+    # потребность (все хиты, до 40 дн): Москва 700, СПб 150, Казань 400; на ФФ 600 — СПб и Москва первыми,
+    # на обоих не хватает (850) — делим пропорционально; Казани не остаётся
+    assert sum(by.values()) <= 600 and not by.get("Казань")
+    assert by["Москва, МО и Дальние регионы"] > by["Санкт-Петербург и СЗО"] > 0
+    assert all("не хватает ФФ: потребность всех кластеров 1250 шт больше свободного на ФФ 600 шт" in ln.flags[0]
                for ln in plan.lines)
     # хватает на СПб и Москву — остаток Казани (Ростова нет)
     s = snap(sales("OZ1", MSK1, 20) + sales("OZ1", KZN, 10) + sales("OZ1", SPB, 5),
              stocks=[("OZ1", MSK1, 100, 0), ("OZ1", SPB, 50, 0)], ms={"OZ1": 900}, units={"OZ1": unit("OZ1")})
     by = {ln.warehouse: ln.qty for ln in calc.build(s).lines}
-    assert by == {"Москва, МО и Дальние регионы": 600, "Санкт-Петербург и СЗО": 125, "Казань": 175}
+    assert by == {"Москва, МО и Дальние регионы": 700, "Санкт-Петербург и СЗО": 150, "Казань": 50}
 
 
-def test_need_owner_zayavka_formula():
-    # (продажи 14 дн × 2,5 − в пути − остаток Ozon) × коэф: OZ446-AC6 02.11 — (109 × 2,5 − 254) × 1,81 = 33
-    assert config.need(109, 254, 1.81) == 33
-    assert config.need(100, 300, 1.5) == 0          # остатка хватает — 0, не минус
-    assert config.need(10, 0, 0) == 25              # нет коэффициента — считаем с 1
+def test_need_owner_logic_target_days():
+    # запас от 30 дн — не везём: OZ446-AC6 02.11 — 254 шт при 109 за 14 дн = 33 дн
+    assert config.need(109, 254) == 0
+    assert config.need(77, 86) == 134       # хит: до 40 дн — 40 × 5,5 − 86
+    assert config.need(15, 31) == 23        # 29 дн — ещё везём; медленный: до 50 дн
+    assert config.need(5, 8) == 10
+    assert config.need(0, 0) == 0
+
+
+def test_round_qty_owner_rules():
+    assert config.round_qty(134, [300, 200, 150, 70]) == (150, 150)   # короб рядом (±25%) — ровно короб
+    assert config.round_qty(80, [50, 20, 10]) == (80, None)             # до 100 — до 10
+    assert config.round_qty(230, [50]) == (250, None)                   # больше 100 — до 50
+    assert config.round_qty(11, [100, 40]) == (30, None)                # минимум 30
+
+
+def test_slow_item_big_box_is_orange():
+    # 5 шт за 14 дн, на Ozon 8 → нужно 10 → минимум 30 → после поставки 106 дн > 60 — оранжевый, решает владелец
+    s = snap(sales("OZ1", MSK1, 1, days=5), stocks=[("OZ1", MSK1, 8, 0)], ms={"OZ1": 1000},
+             units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("40×30×30", 100)]})
+    ln = calc.build(s).lines[0]
+    assert ln.qty == 30 and ln.warn == "короб" and any("больше 60" in f for f in ln.flags)

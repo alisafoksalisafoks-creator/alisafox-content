@@ -8,7 +8,7 @@ from .sources.sheets import norm, root_of
 LIMIT = 3800
 ICON = {"срочно": "🔴", "наверх": "🟡", "обычно": "⚪"}
 DEMAND_ICON = {"опт": "🟧 ", "всплеск": "🟧 ", "рост": "📈 "}
-WARN_ICON = {"платное": "🟥 ", "выкуп": "🟪 "}
+WARN_ICON = {"платное": "🟥 ", "выкуп": "🟪 ", "короб": "📦 "}
 
 
 def fmt(n):
@@ -89,10 +89,12 @@ def warehouse(plan, name):
     head = [f"<b>{escape(name)}</b> · {escape(where)}" + (f"\n{ship} (подсказка)" if ship else ""),
             f"{fmt(sum(x.qty for x in items))} шт, {sum(x.box_count for x in items)} коробов, отгрузка {plan.ship_date:%d.%m}",
             "",
-            "<b>Как считаю</b>: скорость = отгрузки кластера за 14 дн ÷ 14 × сезон. "
-            f"Потребность = (продажи 14 дн × {config.STOCK_MULT:g} − в пути − доступно на Ozon) × коэф. сезона, как в «Заявке». "
+            "<b>Как считаю</b> (ваша логика): запас = (доступно на Ozon + в пути) ÷ продажи кластера за 14 дн × 14. "
+            f"Запас от {config.TRIGGER_DAYS} дн — не везём. Меньше — довозим до {config.TARGET_HIT} дн (хит, от {config.HIT_SALES14} шт за 14 дн), "
+            f"{config.TARGET_MID} дн (20–39 шт) или {config.TARGET_SLOW} дн (медленные). "
             "Опт (заказ от 10 шт) в спрос не беру, разовый всплеск считаю как обычный день — 🟧; всплески чаще раза в неделю — 📈 спрос растёт. "
-            "Везём в пределах нашего склада: полные короба; сверх короба от половины маленького короба — ещё короб; потребность меньше половины маленького короба — 🟨 неполный короб (до 10 шт вверх).", ""]
+            f"Округление: короб из квантов рядом (±25%) — ровно короб, иначе до 10 шт (больше 100 — до 50), минимум {config.MIN_SHIP} шт. "
+            f"📦 — после поставки запас больше {config.SLOW_MAX_DAYS} дн, решаете вы. Везём в пределах нашего склада.", ""]
     rows = []
     for ln in sorted(items, key=lambda x: (-["обычно", "наверх", "срочно"].index(x.priority), -x.qty)):
         days = f"{ln.days:.0f} дн" if ln.days is not None else "—"
@@ -101,9 +103,9 @@ def warehouse(plan, name):
         part = WARN_ICON.get(ln.warn, "") + part + DEMAND_ICON.get(ln.demand, "")
         rows.append(f"{ICON[ln.priority]} {part}<code>{escape(ln.offer)}</code> — <b>{fmt(ln.qty)}</b> шт ({_boxes(ln)}) · "
                     f"{ln.speed:.1f}/дн, запас {days}{flag}\n"
-                    f"   ({ln.sales14} шт за 14 дн × {config.STOCK_MULT:g} − {fmt(ln.have)} на Ozon) × {ln.season:g} = "
+                    f"   {ln.sales14} шт за 14 дн, на Ozon {fmt(ln.have)} → до {config.target_days(ln.sales14)} дн нужно "
                     f"{fmt(ln.need)} → везём {fmt(ln.qty)}"
-                    + ("" if ln.qty == ln.need else " (по коробам, в пределах нашего склада)"))
+                    + ("" if ln.qty == ln.need else " (округление, в пределах нашего склада)"))
     return chunks(head + rows + stop)
 
 
@@ -161,7 +163,7 @@ def order(plan):
     lines = ["<b>🛒 Заказать</b>",
              "На Ozon скоро закончится или уже 0, а на нашем складе нет или не хватает. Только прибыльные артикулы.",
              "Прибыль на 1 шт бот считает сам по отчётам Ozon с 1-го числа прошлого месяца, минус себестоимость и УСН 7%.",
-             f"Заказать = потребность кластеров (продажи 14 дн × {config.STOCK_MULT:g} − остаток Ozon) × сезон − всё, что есть на нашем складе.", ""]
+             "Заказать = потребность кластеров (до 40–50 дн запаса) − всё, что есть на нашем складе.", ""]
     for x in plan.order:
         when = "на Ozon уже 0" if x["ozon"] <= 0 else f"на Ozon хватит на {x['days']:.0f} дн"
         lines.append(f"<code>{escape(x['offer'])}</code> — заказать <b>{fmt(x['order'])}</b> шт · {when} · "

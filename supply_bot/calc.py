@@ -430,26 +430,32 @@ def build(snap, overrides=None):
         if ln.qty <= 0:
             continue
         sizes = _sizes(offer, ln.root, snap.boxes)
-        if not sizes:
-            ln.flags.append("нет кванта коробов — количество без округления")
-            continue
         if ln.manual:
+            if not sizes:
+                ln.flags.append("нет кванта коробов — количество без округления")
+                continue
             # ручное количество — до ближайших полных коробов (поровну — вверх)
             down, up = pick_boxes(ln.qty, sizes, ln.qty), pick_boxes(ln.qty, sizes, 10 ** 9)
             boxes = min((up, down), key=lambda bx: abs(sum(s * k for s, k in bx) - ln.qty))
+            ln.boxes = label_boxes(boxes, sizes)
+            ln.qty = sum(s * k for _, s, k in ln.boxes)
+            continue
+        # логика владельца (02.11.2026): короб рядом — ровно короб; иначе круглое число, не меньше 30 шт
+        raw = ln.qty
+        q, box = config.round_qty(raw, [sz for _, sz in sizes])
+        ln.qty = q
+        small = min((sz for _, sz in sizes), default=0)
+        if box:
+            ln.boxes = label_boxes([(box, 1)], sizes)
+        elif small and q % small == 0:   # круглое число ровно в маленьких коробах — так и пишем
+            ln.boxes = label_boxes([(small, q // small)], sizes)
         else:
-            boxes, dropped, part = pack(ln.qty, sizes)
-            if dropped:
-                ln.flags.append(f"сверх короба {dropped} шт не везём (меньше половины короба {min(sz for _, sz in sizes)})")
-            elif sum(sz * k for sz, k in boxes) > ln.qty:
-                ln.flags.append(f"сверх короба +{sum(sz * k for sz, k in boxes) - ln.qty} шт до полного короба")
-            if part:
-                ln.boxes = [(f"{PARTIAL} ({min(sizes, key=lambda x: x[1])[0]})", part, 1)]
-                ln.qty = part
-                ln.flags.append(f"{PARTIAL}: нужно {ln.need}, самый маленький короб {min(sz for _, sz in sizes)} шт")
-                continue
-        ln.boxes = label_boxes(boxes, sizes)
-        ln.qty = sum(s * k for _, s, k in ln.boxes)
+            ln.boxes = []
+        d = ln.sales14 / config.SALES_DAYS if ln.sales14 else 0
+        ln.flags.append(f"запас {ln.have / d:.0f} дн → везём до {config.target_days(ln.sales14)} дн: нужно {raw}, везём {q}"
+                        + (f" (ровно короб {box})" if box else "") if d else f"нужно {raw}, везём {q}")
+        if not sizes:
+            ln.flags.append("нет кванта коробов")
 
     # --- итоговая проверка: не больше свободного остатка ---
     for key, group in groups.items():
@@ -463,8 +469,15 @@ def build(snap, overrides=None):
                                    f"{ff['free']} шт — сюда {ln.qty} из {ln.need}; очередь: СПб и Москва, Ростов, Казань, "
                                    "дальше по продажам кластера")
         for ln in group:
-            if ln.manual and ln.qty > ln.need + ln.speed * config.ROUND_UP_EXTRA_DAYS and ln.speed:
-                ln.flags.append(f"запас после поставки {(ln.have + ln.qty) / ln.speed - ln.lead:.0f} дн — больше {config.TARGET_DAYS - ln.lead}")
+            d = ln.sales14 / config.SALES_DAYS if ln.sales14 else 0
+            after = (ln.have + ln.qty) / d if d else None
+            if ln.qty and after and after > config.SLOW_MAX_DAYS:
+                small = min((sz for _, sz in _sizes(norm(ln.offer), ln.root, snap.boxes)), default=None)
+                if not ln.warn:
+                    ln.warn = "короб"
+                ln.flags.append(f"после поставки запас {after:.0f} дн (больше {config.SLOW_MAX_DAYS})"
+                                + (f"; самый маленький короб {small} шт" if small else "")
+                                + " — решите: неполный короб, не везти или закроет соседний кластер")
 
     # --- «Заказать»: потребность кластеров больше, чем можем отгрузить с нашего склада ---
     shipped = defaultdict(int)
