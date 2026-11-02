@@ -54,7 +54,12 @@ class Line:
     ship_to: str = ""         # склад приёмки — подсказка: наш основной склад кластера
     demand: str = ""          # «опт», «всплеск» или «рост» — строку подсвечиваем
     main: bool = False        # приоритетный кластер артикула при нехватке нашего склада
+    bf: float = 1.0           # доля выкупа, если выкуп < 85%: скорость считаем по выкупам
     warn: str = ""            # «платное» (красный) или «выкуп» (сиреневый) — грузим, но подсвечиваем
+
+    @property
+    def eff14(self):
+        return self.sales14 * self.bf
 
     @property
     def have(self):
@@ -341,7 +346,8 @@ def build(snap, overrides=None):
         k_next = season_k(snap, u.get("category"), month % 12 + 1)
         if k < config.SEASON_LOW or (k and k_next < k * (1 - config.SEASON_DROP)):
             plan.season_notes.append({"offer": name, "category": u.get("category"), "k": k, "k_next": k_next})
-        eligible[offer] = {"u": u, "k": k, "key": key, "name": name, "warn": warn}
+        bf = u["buyout"] if warn and warn[0] == "выкуп" else 1.0   # выкуп < 85% — скорость по выкупам (02.11.2026)
+        eligible[offer] = {"u": u, "k": k, "key": key, "name": name, "warn": warn, "bf": bf}
 
     # --- направления: кластер целиком, в Москве — основные склады ---
     s14c, s30c, stock_c = defaultdict(float), defaultdict(int), {}
@@ -366,11 +372,11 @@ def build(snap, overrides=None):
         st = stock_c.get((offer, cl), zero)
         speed = s14c.get((offer, cl), 0) / config.SALES_DAYS * e["k"]
         lead = config.lead_days(cl)
-        need = config.need(s14c.get((offer, cl), 0), st["available"] + st["transit"], e["k"])
+        need = config.need(s14c.get((offer, cl), 0) * e["bf"], st["available"] + st["transit"], e["k"])
         lines[(offer, cl)] = Line(
             offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
             sales14=round(s14c.get((offer, cl), 0)), sales30=s30c.get((offer, cl), 0), speed=speed,
-            available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"])
+            available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"], bf=e["bf"])
         if e.get("warn"):
             lines[(offer, cl)].warn = e["warn"][0]
             lines[(offer, cl)].flags.append(e["warn"][1])
@@ -446,7 +452,13 @@ def build(snap, overrides=None):
         bigger = sorted(sz for _, sz in sizes if sz >= raw)
         if ln.have <= 0 and bigger:   # на Ozon 0 — ближайший полный короб (решение владельца 02.11.2026)
             q, box = bigger[0], bigger[0]
-        d0 = ln.sales14 / config.SALES_DAYS if ln.sales14 else 0
+        d0 = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
+        if d0 and ln.have > 0 and ln.have / d0 >= config.ORANGE_WAIT_DAYS and (ln.have + q) / d0 > config.SLOW_MAX_DAYS:
+            # оранжевая строка, а запаса ещё от 25 дн — ждём неделю, довезём больше (решение владельца 02.11.2026)
+            ln.flags.append(f"не везём: запас {ln.have / d0:.0f} дн, а {q} шт дали бы {(ln.have + q) / d0:.0f} дн "
+                            f"(больше {config.SLOW_MAX_DAYS}) — повезём со следующей поставкой")
+            ln.qty, ln.boxes = 0, []
+            continue
         if d0 and ln.have > 0 and (ln.have + q) / d0 > config.SKIP_AFTER_DAYS:
             ln.flags.append(f"не везём: нужно {raw}, но {q} шт дали бы запас {(ln.have + q) / d0:.0f} дн "
                             f"(больше {config.SKIP_AFTER_DAYS})")
@@ -460,8 +472,9 @@ def build(snap, overrides=None):
             ln.boxes = label_boxes([(small, q // small)], sizes)
         else:
             ln.boxes = []
-        d = ln.sales14 / config.SALES_DAYS if ln.sales14 else 0
-        ln.flags.append(f"запас {ln.have / d:.0f} дн → везём до {config.target_days(ln.sales14)} дн: нужно {raw}, везём {q}"
+        d = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
+        ln.flags.append((f"скорость по выкупу {ln.bf:.0%}: {ln.eff14:.0f} из {ln.sales14} шт за 14 дн; " if ln.bf < 1 else "")
+                        + f"запас {ln.have / d:.0f} дн → везём до {config.target_days(ln.eff14)} дн: нужно {raw}, везём {q}"
                         + (f" (ровно короб {box})" if box else "") if d else f"нужно {raw}, везём {q}")
         if not sizes:
             ln.flags.append("нет кванта коробов")
@@ -469,9 +482,11 @@ def build(snap, overrides=None):
     # --- итоговая проверка: не больше свободного остатка ---
     for key, group in groups.items():
         ff = ms_by[key]
+        before = {id(ln): ln.qty for ln in group}
         _fit(group, ff["free"], cl_sales)
-        for ln in group:   # после урезания под наш склад меньше минимума — не везём
-            if not ln.manual and 0 < ln.qty < config.MIN_SHIP:
+        for ln in group:   # урезали под наш склад до меньше минимума — не везём (ровно короб 20 шт по расчёту — везём)
+            cut = ln.qty < before[id(ln)] or sum(x.need for x in group) > ff["free"]
+            if not ln.manual and cut and 0 < ln.qty < config.MIN_SHIP:
                 ln.flags.insert(0, f"не везём: на нашем складе осталось {ln.qty} шт для этого кластера — "
                                    f"меньше минимума {config.MIN_SHIP} шт")
                 ln.qty, ln.boxes = 0, []
@@ -483,7 +498,7 @@ def build(snap, overrides=None):
                                    f"{ff['free']} шт — сюда {ln.qty} из {ln.need}; очередь: СПб и Москва, Ростов, Казань, "
                                    "дальше по продажам кластера")
         for ln in group:
-            d = ln.sales14 / config.SALES_DAYS if ln.sales14 else 0
+            d = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
             after = (ln.have + ln.qty) / d if d else None
             if ln.qty and after and after > config.SLOW_MAX_DAYS:
                 small = min((sz for _, sz in _sizes(norm(ln.offer), ln.root, snap.boxes)), default=None)
@@ -509,7 +524,7 @@ def build(snap, overrides=None):
             o = offer
             sp = s14c.get((o, cl), 0) / config.SALES_DAYS * e["k"]
             st = stock_c.get((o, cl), zero)
-            need += config.need(s14c.get((o, cl), 0), st["available"] + st["transit"], e["k"])
+            need += config.need(s14c.get((o, cl), 0) * e.get("bf", 1.0), st["available"] + st["transit"], e["k"])
             have += st["available"] + st["transit"]
             speed += sp
         key = _ms_key(offer, snap.unit, ms_by)

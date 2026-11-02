@@ -280,3 +280,24 @@ def test_ff_leftover_below_minimum_not_shipped():
              units={"OZ1": unit("OZ1")})
     plan = calc.build(s)
     assert not plan.lines and "меньше минимума 30" in plan.small[0]["why"]
+
+
+def test_orange_with_25_days_waits_for_next_week():
+    # Невинномысск 02.11, OZ462: 11 шт за 14 дн, на Ozon 23 (29 дн) → 30 шт дали бы 67 дн — не везём, ждём неделю
+    s = snap(sales("OZ1", MSK1, 1, days=11), stocks=[("OZ1", MSK1, 23, 0)], ms={"OZ1": 1000},
+             units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("40×30×30", 100)]})
+    plan = calc.build(s)
+    assert not plan.lines and "следующей поставкой" in plan.small[0]["why"]
+    # запас 20 дн (OZ159NEW2) — оранжевый, но везём
+    s = snap(sales("OZ1", MSK1, 1, days=10), stocks=[("OZ1", MSK1, 14, 0)], ms={"OZ1": 1000},
+             units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("40×30×30", 100)]})
+    ln = calc.build(s).lines[0]
+    assert ln.qty == 30 and ln.warn == "короб"
+
+
+def test_low_buyout_speed_by_buyouts():
+    # 28 шт за 14 дн, выкуп 50% → скорость 1 шт/дн; на Ozon 10 → до 45 дн (14 выкупов — «до 20» → 50 дн): 50 − 10 = 40
+    s = snap(sales("OZ1", MSK1, 2), stocks=[("OZ1", MSK1, 10, 0)], ms={"OZ1": 1000},
+             units={"OZ1": unit("OZ1", buyout=0.5)})
+    ln = calc.build(s).lines[0]
+    assert ln.need == 40 and ln.warn == "выкуп" and any("скорость по выкупу 50%" in f for f in ln.flags)
