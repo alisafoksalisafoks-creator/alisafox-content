@@ -29,12 +29,21 @@ const CP = {
   // Названия колонок с артикулом площадки. Скрипт возьмёт первую найденную.
   // Регистр, ё/е, пробелы и знаки препинания не важны.
   KEY_HEADERS: {
-    OZON: ['Артикул Ozon', 'Артикул Озон', 'SKU Ozon', 'Ozon SKU', 'Артикул OZ', 'Ozon артикул', 'Озон артикул', 'Озон', 'Ozon'],
-    YM:   ['Артикул ЯМ', 'Артикул Яндекс Маркет', 'Артикул Яндекс', 'SKU ЯМ', 'SKU на Маркете', 'Артикул YM', 'ЯМ артикул', 'ЯМ', 'Яндекс Маркет'],
-    WB:   ['Артикул WB', 'Артикул ВБ', 'Артикул Wildberries', 'nmID', 'Артикул ВБ (nmID)', 'WB артикул', 'ВБ артикул', 'ВБ', 'WB'],
+    // Голые «Озон/ВБ/ЯМ» не используем: так подписаны колонки цен под общими заголовками.
+    OZON: ['Артикул Ozon', 'Артикул Озон', 'SKU Ozon', 'Ozon SKU', 'Артикул OZ', 'Ozon артикул', 'Озон артикул', 'Артикул'],
+    YM:   ['Артикул ЯМ', 'Артикул Яндекс Маркет', 'Артикул Яндекс', 'SKU ЯМ', 'SKU на Маркете', 'Артикул YM', 'ЯМ артикул'],
+    WB:   ['Артикул WB', 'Артикул ВБ', 'Артикул Wildberries', 'nmID', 'Артикул ВБ (nmID)', 'WB артикул', 'ВБ артикул'],
   },
 
-  // Куда писать цену. Если колонки нет, скрипт создаст её справа от последней колонки шапки.
+  // Куда писать цену. Вариант 1: общий заголовок CLIENT_GROUP над колонками (может быть объединённой
+  // ячейкой), а под ним подписи площадок из MP_SUBHEADERS. Вариант 2: одна ячейка вида PRICE_HEADERS.
+  // Новых колонок скрипт не создаёт.
+  CLIENT_GROUP: 'Цена клиента',
+  MP_SUBHEADERS: {
+    OZON: ['Озон', 'Ozon'],
+    YM:   ['ЯМ', 'Яндекс Маркет', 'YM', 'Маркет'],
+    WB:   ['ВБ', 'WB', 'Wildberries'],
+  },
   PRICE_HEADERS: {
     OZON: 'Цена клиента Ozon',
     YM:   'Цена клиента ЯМ',
@@ -61,7 +70,7 @@ function addClientPriceMenu() {
   SpreadsheetApp.getUi()
     .createMenu('💰 Цены клиента')
     .addItem('🔄 Ozon: факт цена покупателя', 'cpUpdateOzon')
-    .addItem('🔄 Яндекс Маркет: цена на витрине', 'cpUpdateYM')
+    .addItem('🔄 Яндекс Маркет: факт цена покупателя', 'cpUpdateYM')
     .addItem('🔄 Wildberries: цена покупателя (с СПП)', 'cpUpdateWB')
     .addSeparator()
     .addItem('🔄 Все три площадки', 'cpUpdateAll')
@@ -145,12 +154,11 @@ function cpUpdate_(mp) {
   }
   const headers = top[headerRow - 1];
 
-  // 2. Колонка цены: находим или создаём.
-  let priceCol = cpFindCol_(headers, [CP.PRICE_HEADERS[mp]]) + 1;
+  // 2. Колонка цены: «Цена клиента» → подпись площадки, или одна ячейка «Цена клиента Ozon».
+  const priceCol = cpFindPriceCol_(top, headerRow, mp);
   if (priceCol < 1) {
-    priceCol = lastCol + 1;
-    if (priceCol > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), 1);
-    sh.getRange(headerRow, priceCol).setValue(CP.PRICE_HEADERS[mp]).setFontWeight('bold');
+    throw new Error('Не нашёл колонку цены клиента ' + MP_NAMES[mp] + ': нужен общий заголовок «' + CP.CLIENT_GROUP +
+      '» и под ним «' + CP.MP_SUBHEADERS[mp][0] + '», или колонка «' + CP.PRICE_HEADERS[mp] + '».');
   }
 
   // 3. Данные: все строки ниже шапки, включая скрытые и отфильтрованные.
@@ -175,15 +183,23 @@ function cpUpdate_(mp) {
     if (!k) { empty++; continue; }        // пустую строку не трогаем
     const p = prices[k];
     if (p != null) { out[i][0] = p; updated++; }
+    else if (mp === 'YM') { notFound++; }  // ЯМ: без заказов — значение в ячейке не трогаем
     else {
       out[i][0] = CP.NOT_FOUND_TEXT; notFound++;
       if (notFoundSamples.length < 10) notFoundSamples.push(keys[i][0]);
     }
   }
   priceRange.setValues(out); // setValues пишет и в скрытые/отфильтрованные строки
+  // Убираем старые примечания других скриптов с ячеек, которые мы переписали.
+  const notes = priceRange.getNotes();
+  for (let i = 0; i < keys.length; i++) {
+    const k = cpNormKey_(keys[i][0]);
+    if (k && (prices[k] != null || mp !== 'YM')) notes[i][0] = '';
+  }
+  priceRange.setNotes(notes);
   priceRange.setNumberFormat('#,##0 ₽');
   sh.getRange(headerRow, priceCol).setNote(
-    MP_NAMES[mp] + (mp === 'OZON' ? ' — ' + (prices.__note || '') : '') + ': обновлено ' + Utilities.formatDate(new Date(), 'Europe/Moscow', 'dd.MM.yyyy HH:mm') +
+    MP_NAMES[mp] + (prices.__note ? ' — ' + prices.__note : '') + ': обновлено ' + Utilities.formatDate(new Date(), 'Europe/Moscow', 'dd.MM.yyyy HH:mm') +
     ' МСК, строк ' + updated + ', не найдено ' + notFound);
 
   return { updated, notFound, empty, apiCount, notFoundSamples, keyHeader };
@@ -212,6 +228,30 @@ function cpFindCol_(row, candidates) {
   return -1;
 }
 
+/** Номер колонки (с 1) цены клиента площадки mp или -1. */
+function cpFindPriceCol_(top, headerRow, mp) {
+  const hdr = top[headerRow - 1];
+  const direct = cpFindCol_(hdr, [CP.PRICE_HEADERS[mp]]);
+  if (direct >= 0) return direct + 1;
+  const g = cpNormHeader_(CP.CLIENT_GROUP);
+  const subs = CP.MP_SUBHEADERS[mp].map(cpNormHeader_);
+  for (let r = 0; r < top.length; r++) {
+    const row = top[r];
+    for (let c = 0; c < row.length; c++) {
+      if (cpNormHeader_(row[c]) !== g) continue;
+      // Объединённая ячейка хранит текст только в первой колонке: группа идёт до следующего заголовка в этой строке.
+      let end = c + 1;
+      while (end < row.length && !String(row[end]).trim()) end++;
+      for (let rr = r; rr < Math.min(top.length, r + 3); rr++) {
+        for (let cc = c; cc < end; cc++) {
+          if (subs.indexOf(cpNormHeader_(top[rr][cc])) >= 0) return cc + 1;
+        }
+      }
+    }
+  }
+  return -1;
+}
+
 function cpNormKey_(v) {
   return String(v == null ? '' : v).trim().replace(/\s+/g, '').replace(/^'/, '').toLowerCase();
 }
@@ -224,7 +264,7 @@ function cpAddPrice_(map, key, price) {
 
 function cpFetch_(mp) {
   if (mp === 'OZON') return cpOzonClientPrices_();
-  if (mp === 'YM') return cpYMPrices_();
+  if (mp === 'YM') return cpYMFactPrices_();
   if (mp === 'WB') return cpWBPrices_();
   throw new Error('Неизвестная площадка ' + mp);
 }
@@ -495,6 +535,54 @@ function cpYMPrices_() {
       token = res.paging && res.paging.nextPageToken;
     } while (token && ++guard < 1000);
   });
+  return map;
+}
+
+/**
+ * Цена клиента ЯМ: сколько заплатил покупатель (цена BUYER в заказе — уже со скидками и субсидиями Маркета),
+ * средняя по штукам за последний день с заказами за CP.OZON_FACT_DAYS дней. Отменённые заказы
+ * и оплату баллами почти целиком (≤ 10 ₽) не считаем. Нет заказов — ячейку не трогаем
+ * (там остаётся цена на витрине из отчёта «Цены»).
+ */
+function cpYMFactPrices_() {
+  const h = cpYMHeaders_();
+  const camps = cpYMCampaigns_(h);
+  if (!camps.length) throw new Error('По ключу ЯМ не найдено ни одного магазина.');
+  const from = cpDaysAgo_(CP.OZON_FACT_DAYS);
+  const pad = n => (n < 10 ? '0' : '') + n;
+  const dateFrom = from.year + '-' + pad(from.month) + '-' + pad(from.day);
+  const dateTo = Utilities.formatDate(new Date(), 'Europe/Moscow', 'yyyy-MM-dd');
+  const agg = {}; // offerId → {day, sum, qty, msku}
+  camps.forEach(c => {
+    let token = '', guard = 0;
+    do {
+      const q = '?limit=200' + (token ? '&page_token=' + encodeURIComponent(token) : '');
+      const r = cpHttp_(YM_BASE + '/v2/campaigns/' + c.id + '/stats/orders' + q,
+        { method: 'post', headers: h, body: { dateFrom: dateFrom, dateTo: dateTo } });
+      const res = r.result || {};
+      (res.orders || []).forEach(o => {
+        if (/^CANCELLED/.test(o.status || '')) return;
+        const day = o.creationDate || '';
+        (o.items || []).forEach(it => {
+          const buyer = (it.prices || []).find(p => p.type === 'BUYER');
+          const v = buyer && buyer.costPerItem, n = it.count || 1;
+          if (!it.shopSku || !(v > 10)) return;
+          const a = agg[it.shopSku];
+          if (!a || day > a.day) agg[it.shopSku] = { day: day, sum: v * n, qty: n, msku: it.marketSku };
+          else if (day === a.day) { a.sum += v * n; a.qty += n; }
+        });
+      });
+      token = res.paging && res.paging.nextPageToken;
+    } while (token && ++guard < 200);
+  });
+  const map = {};
+  Object.keys(agg).forEach(id => {
+    const a = agg[id], avg = a.sum / a.qty;
+    cpAddPrice_(map, id, avg);
+    if (a.msku) cpAddPrice_(map, a.msku, avg);
+  });
+  map.__note = 'факт: сколько заплатил покупатель, последний день с заказами с ' + dateFrom +
+    ' (' + Object.keys(agg).length + ' товаров); без заказов ячейка не меняется';
   return map;
 }
 
