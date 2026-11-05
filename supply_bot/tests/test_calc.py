@@ -269,11 +269,29 @@ def test_slow_item_orange_and_skip_over_80_days():
 
 
 def test_empty_ozon_stock_gets_nearest_full_box():
-    # на Ozon 0, 5 шт за 14 дн → нужно 18, короба 40 и 100 → полный короб 40; правило 80 дн не действует — товар должен быть
+    # на Ozon 0, 10 шт за 14 дн → нужно 36, короба 40 и 100 → полный короб 40 (56 дн)
+    s = snap(sales("OZ1", MSK1, 1, days=10), ms={"OZ1": 1000},
+             units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("A", 100), ("B", 40)]})
+    ln = calc.build(s).lines[0]
+    assert ln.need == 36 and ln.qty == 40 and ln.boxes == [("B", 40, 1)]
+    # 5 шт за 14 дн: короб 40 хватит на 112 дн (> 80) — не короб, а минимум 30; товар в кластере всё равно будет (05.11.2026)
     s = snap(sales("OZ1", MSK1, 1, days=5), ms={"OZ1": 1000},
              units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("A", 100), ("B", 40)]})
     ln = calc.build(s).lines[0]
-    assert ln.need == 18 and ln.qty == 40 and ln.boxes == [("B", 40, 1)]
+    assert ln.need == 18 and ln.qty == 30
+
+
+def test_closed_warehouse_stock_and_supply_not_counted():
+    # 05.11.2026: Адыгейск закрыт — поставка туда «в пути» потеряна, склад приёмки — другой склад кластера
+    KRD, NVR = "АДЫГЕЙСК_РФЦ", "НОВОРОССИЙСК_РФЦ"
+    CLUSTERS.update({KRD: "Краснодар", NVR: "Краснодар"})
+    s = snap(sales("OZ1", KRD, 3) + sales("OZ1", NVR, 1), stocks=[("OZ1", KRD, 0, 100), ("OZ1", NVR, 5, 0)],
+             ms={"OZ1": 1000}, units={"OZ1": unit("OZ1")})
+    s.not_accepted = [{"order": "1", "warehouse": KRD, "cluster": "Краснодар", "slot": "2026-10-23T10:00:00Z",
+                       "items": {"OZ1": 100}}]
+    plan = calc.build(s)
+    ln = next(x for x in plan.lines if x.cluster == "Краснодар")
+    assert ln.transit == 0 and ln.ship_to == NVR and ln.qty > 0 and plan.stuck[0]["order"] == "1"
 
 
 def test_ff_leftover_below_minimum_not_shipped():

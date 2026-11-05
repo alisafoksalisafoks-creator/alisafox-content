@@ -265,7 +265,8 @@ def build(snap, overrides=None):
             continue
         key = (norm(r["offer_id"]), r["warehouse"])
         rec = stock.setdefault(key, {"available": 0, "transit": 0})
-        rec["available"] += r["available"]
+        if r["warehouse"] not in config.CLOSED_WAREHOUSES:   # закрытый склад: остаток не продаётся
+            rec["available"] += r["available"]
         rec["transit"] += r["transit"]
         if r.get("cluster"):
             cluster_of[r["warehouse"]] = r["cluster"]
@@ -371,7 +372,8 @@ def build(snap, overrides=None):
             continue
         age = (today - date.fromisoformat(sp["slot"][:10])).days
         cl = cluster_of.get(sp.get("warehouse")) or sp.get("cluster")
-        if age <= config.STUCK_DAYS or not cl:
+        closed = sp.get("warehouse") in config.CLOSED_WAREHOUSES
+        if (age <= config.STUCK_DAYS and not closed) or not cl:
             continue
         plan.stuck.append({"order": sp["order"], "cluster": cl, "slot": sp["slot"][:10], "days": age,
                            "qty": sum(sp["items"].values())})
@@ -381,9 +383,13 @@ def build(snap, overrides=None):
                 cut = min(q, rec["transit"])
                 rec["transit"] -= cut
                 if cut:
-                    stuck_cut[(norm(o), cl)].append(f"из «в пути» убрала {cut} шт: поставка {sp['order']} не принята "
-                                                    f"Ozon с {sp['slot'][8:10]}.{sp['slot'][5:7]} ({age} дн) — напишите в поддержку")
-    top_wh = {cl: max(items)[1] for cl, items in by_cluster.items() if items}
+                    stuck_cut[(norm(o), cl)].append(
+                        f"из «в пути» убрала {cut} шт: поставка {sp['order']} " + (
+                            f"на закрытый склад {sp['warehouse']}" if closed else
+                            f"не принята Ozon с {sp['slot'][8:10]}.{sp['slot'][5:7]} ({age} дн)") + " — напишите в поддержку")
+    top_wh = {cl: max(items)[1] for cl, items in
+              ((cl, [x for x in items if x[1] not in config.CLOSED_WAREHOUSES]) for cl, items in by_cluster.items())
+              if items}
     zero = {"available": 0, "transit": 0}
 
     lines = {}
@@ -517,8 +523,13 @@ def build(snap, overrides=None):
         raw = ln.qty
         q, box = config.round_qty(raw, [sz for _, sz in sizes])
         bigger = sorted(sz for _, sz in sizes if sz >= raw)
-        if ln.have <= 0 and bigger:   # на Ozon 0 — ближайший полный короб (решение владельца 02.11.2026)
+        d_full = ln.eff14 / config.SALES_DAYS if ln.sales14 else ln.speed
+        # на Ozon 0 — ближайший полный короб (02.11.2026), но не больше 80 дн запаса (05.11.2026: OZ386BLACK 100 шт)
+        if ln.have <= 0 and bigger and (not d_full or bigger[0] / d_full <= config.SKIP_AFTER_DAYS):
             q, box = bigger[0], bigger[0]
+        elif ln.have <= 0 and bigger and d_full:   # короб больше 80 дн — везём минимум, товар в кластере должен быть
+            ln.flags.append(f"короб {bigger[0]} шт хватит на {bigger[0] / d_full:.0f} дн (больше "
+                            f"{config.SKIP_AFTER_DAYS}) — везём минимум")
         if ln.absent and ln.speed:
             if q / ln.speed > config.SKIP_AFTER_DAYS:   # полный короб слишком велик — пробуем круглое число
                 q, box = config.round_qty(raw, [sz for _, sz in sizes])
