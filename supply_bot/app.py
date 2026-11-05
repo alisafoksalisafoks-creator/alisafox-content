@@ -1,6 +1,7 @@
 """Telegram-бот поставок. Старт: FBO / FBS. Под FBO — распределение, поиск по артикулу и складу, правки.
 
-Бот только читает Ozon, «Мой склад» и таблицы. В кабинете ничего не создаёт.
+Бот читает Ozon, «Мой склад» и таблицы. Если на сервере есть ключ поставок (OZON_SUPPLY_API_KEY), владелец может
+создать черновик и заявку на поставку из экрана направления — только после своего «да» на конкретный план.
 Запуск: python -m supply_bot.app (переменные — в env.example).
 """
 import asyncio
@@ -19,6 +20,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, ErrorEvent, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from . import calc, config, excel, render
+from .sources import ozon_supply
 from .cli import snapshot
 from .data import MSK
 from .sources.sheets import norm
@@ -68,6 +70,7 @@ class State:
         self.lock = asyncio.Lock()
         self.wait = {}   # chat_id → {"step": ..., ...} — чего ждём от владельца текстом
         self.names = {}  # chat_id → имя того, кто просил доступ
+        self.drafts = {}  # chat_id → черновик поставки в Ozon (живёт 30 минут)
         try:
             raw = json.loads(OVERRIDES.read_text(encoding="utf-8"))
             self.overrides = {(o, w): q for o, w, q in raw}
@@ -253,10 +256,20 @@ async def on_button(c: CallbackQuery):
         rows = [[("🏬 Другое направление", "whs:0"), ("⬅️ Меню FBO", "fbo")]]
         if any(x.warehouse == name and x.qty > 0 for x in plan.lines):
             rows.insert(0, [("✅ Всё верно, скачать файл направления", f"whf:{d[3:]}")])
-        await send(m, render.warehouse(plan, name), kb(rows))
+            if ozon_supply.enabled() and m.chat.id in admins():
+                rows.insert(1, [("📝 Создать черновик в Ozon", f"drf:{d[3:]}")])
+        try:
+            carry = json.loads(CARRY.read_text(encoding="utf-8")).get(name)
+        except (OSError, ValueError):
+            carry = None
+        note = [f"↪️ Остаток с отгрузки {carry['date']} (склад не принял): " +
+                ", ".join(f"{escape(o)} {q}" for o, q in carry["items"].items())] if carry and carry.get("items") else []
+        await send(m, note + render.warehouse(plan, name), kb(rows))
     elif d.startswith("whf:"):
         await m.answer("Формирую файл направления…")
         await send_direction_file(m, plan, _wh_by_index(plan, int(d[4:])))
+    elif d.startswith("dr"):
+        await on_draft(m, plan, d)
     elif d == "empty":
         await send(m, render.empty_clusters(plan), FBO)
     elif d == "decide":
@@ -402,6 +415,131 @@ async def send_direction_file(m, plan, name):
     await asyncio.to_thread(excel.build_direction, plan, name, path, S.snap.taken_at)
     await m.answer_document(FSInputFile(path), caption=f"{name}: распределение на {plan.ship_date:%d.%m}. "
                                                        f"Данные на {S.snap.taken_at}.")
+
+
+DRAFT_TTL = 28 * 60   # Ozon хранит черновик 30 минут — после 28 просим создать заново
+
+
+def _slot_text(slot):
+    f, t = slot
+    try:
+        dt = datetime.fromisoformat(f.replace("Z", "+00:00"))
+        dt2 = datetime.fromisoformat(t.replace("Z", "+00:00"))
+    except ValueError:
+        return f"{f} – {t}"
+    wd = "пн вт ср чт пт сб вс".split()[dt.weekday()]
+    star = "⭐ " if dt.weekday() in config.SHIP_WEEKDAYS else ""
+    return f"{star}{wd} {dt:%d.%m} {dt:%H:%M}–{dt2:%H:%M}"
+
+
+async def on_draft(m, plan, d):
+    """Черновик → что примут склады → слот → «да» владельца → заявка. Только для того, кто управляет доступом."""
+    if m.chat.id not in admins():
+        return await m.answer("Создавать поставки может только владелец.")
+    if not ozon_supply.enabled():
+        return await m.answer("На сервере нет ключа поставок Ozon — черновик создать нельзя.")
+    dr = S.drafts.get(m.chat.id)
+    if d == "drx":
+        S.drafts.pop(m.chat.id, None)
+        return await m.answer("Черновик отменён. В кабинете ничего не создано.", reply_markup=FBO)
+    if d.startswith("drf:"):
+        name = _wh_by_index(plan, int(d[4:]))
+        lines = [x for x in plan.lines if x.warehouse == name and x.qty > 0]
+        sku = {norm(r["offer_id"]): s for s, r in S.snap.product_stocks.items()}
+        asked = {x.offer: x.qty for x in lines}
+        items = [(sku[norm(o)], q) for o, q in asked.items() if norm(o) in sku]
+        missing = [o for o in asked if norm(o) not in sku]
+        await m.answer(f"Создаю черновик в Ozon: <b>{escape(name)}</b>, {sum(asked.values())} шт, {len(asked)} арт. "
+                       "Ozon считает до 3 минут…")
+        cl = ozon_supply.SupplyClient()
+        macro = (await asyncio.to_thread(cl.macro_ids)).get(name)
+        if not macro:
+            return await m.answer(f"Не нашёл кластер «{escape(name)}» в Ozon.")
+        draft_id, errs = await asyncio.to_thread(cl.create_draft, macro, items, config.SUPPLY_DROP_OFF_ID)
+        if not draft_id:
+            return await m.answer("Ozon не создал черновик: " + escape(", ".join(str(e.get("error_message")) for e in errs)
+                                                                       or "без причины"))
+        info = await asyncio.to_thread(cl.draft_info, draft_id)
+        whs, errors = ozon_supply.parse_info(info)
+        for w in whs:
+            w["accepted"] = await asyncio.to_thread(cl.bundle, w["bundle_id"]) if w["state"] != "NOT_AVAILABLE" else {}
+        S.drafts[m.chat.id] = {"cluster": name, "draft_id": draft_id, "macro": macro, "asked": asked, "whs": whs,
+                               "created": datetime.now().timestamp()}
+        rows, text = [], [f"📝 <b>Черновик {escape(name)}</b> (живёт 30 минут, в кабинете не виден)", ""]
+        for j, w in enumerate(whs[:8]):
+            take, rest = ozon_supply.split(asked, w["accepted"])
+            why = ozon_supply.REASON_RU.get(w["reason"], "")
+            text.append(f"<b>{escape(w['name'])}</b> — {ozon_supply.STATE_RU.get(w['state'], w['state'])}"
+                        + (f", примет {sum(take.values())} из {sum(asked.values())} шт" if w["state"] != "NOT_AVAILABLE" else "")
+                        + (f" ({why})" if why else ""))
+            cut = [f"   {escape(o)}: {take.get(o, 0)} из {asked[o]}" for o in asked if o in rest]
+            text += cut[:12] + (["   …"] if len(cut) > 12 else [])
+            if w["state"] != "NOT_AVAILABLE" and take:
+                rows.append([(f"✅ {w['name'][:28]} · {sum(take.values())} шт", f"drw:{j}")])
+        if missing:
+            text.append("Нет SKU Ozon, не вошли: " + ", ".join(escape(x) for x in missing))
+        if errors:
+            text.append("Ozon отклонил: " + escape("; ".join(errors[:8])))
+        rows.append([("❌ Отмена", "drx")])
+        text.append("" if rows[:-1] else "Ни один склад не примет поставку сейчас.")
+        return await send(m, render.chunks(text), kb(rows))
+    if not dr:
+        return await m.answer("Черновика нет — создайте его на экране направления.", reply_markup=FBO)
+    if datetime.now().timestamp() - dr["created"] > DRAFT_TTL:
+        S.drafts.pop(m.chat.id, None)
+        return await m.answer("Черновик устарел (Ozon хранит его 30 минут). Создайте заново.", reply_markup=FBO)
+    cl = ozon_supply.SupplyClient()
+    if d.startswith("drw:"):
+        w = dr["whs"][int(d[4:])]
+        dr["wh"] = w
+        slots = await asyncio.to_thread(cl.timeslots, dr["draft_id"], dr["macro"], w["id"])
+        dr["slots"] = slots[:12]
+        if not slots:
+            return await m.answer(f"У {escape(w['name'])} нет свободных слотов на 2 недели. Выберите другой склад.",
+                                  reply_markup=kb([[("❌ Отмена", "drx")]]))
+        rows = [[(_slot_text(sl), f"drs:{k}")] for k, sl in enumerate(dr["slots"])] + [[("❌ Отмена", "drx")]]
+        return await m.answer(f"<b>{escape(w['name'])}</b>: выберите слот отгрузки (⭐ — пн и чт).", reply_markup=kb(rows))
+    if d.startswith("drs:"):
+        dr["slot"] = dr["slots"][int(d[4:])]
+        take, rest = ozon_supply.split(dr["asked"], dr["wh"]["accepted"])
+        dr["take"], dr["rest"] = take, rest
+        text = [f"Записать поставку в Ozon?", "",
+                f"Кластер: <b>{escape(dr['cluster'])}</b>", f"Склад: <b>{escape(dr['wh']['name'])}</b>",
+                f"Слот: <b>{_slot_text(dr['slot'])}</b>", f"Везём: <b>{sum(take.values())} шт</b>, {len(take)} арт.",
+                (f"Остаток на следующую отгрузку: {sum(rest.values())} шт" if rest else "Остатка нет."), "",
+                "Это создаст заявку в кабинете Ozon."]
+        return await m.answer("\n".join(text), reply_markup=kb([[("✅ Да, записать поставку", "dry")],
+                                                                [("❌ Отмена", "drx")]]))
+    if d == "dry":
+        if "slot" not in dr:
+            return await m.answer("Сначала выберите склад и слот.")
+        await m.answer("Создаю заявку в Ozon…")
+        errs = await asyncio.to_thread(cl.create_supply, dr["draft_id"], dr["macro"], dr["wh"]["id"], dr["slot"])
+        st = await asyncio.to_thread(cl.supply_status, dr["draft_id"]) if not errs else {"error_reasons": errs}
+        S.drafts.pop(m.chat.id, None)
+        if st.get("status") != "SUCCESS":
+            return await m.answer("⚠️ Ozon не создал заявку: " + escape(", ".join(st.get("error_reasons") or
+                                                                                  [str(st.get("status"))])), reply_markup=FBO)
+        save_carryover(dr["cluster"], dr["rest"])
+        path = Path(tempfile.gettempdir()) / f"Заявка_{st.get('order_id')}.xlsx"
+        await asyncio.to_thread(excel.build_supply, dr["take"], dr["rest"], path)
+        await m.answer(f"✅ Заявка создана: <b>{st.get('order_id')}</b>, {escape(dr['cluster'])} → "
+                       f"{escape(dr['wh']['name'])}, {_slot_text(dr['slot'])}, {sum(dr['take'].values())} шт.")
+        return await m.answer_document(FSInputFile(path), caption="Что везём и остаток на следующую отгрузку.")
+
+
+CARRY = config.DATA_DIR / "carryover.json"
+
+
+def save_carryover(cluster, rest):
+    """Что склад не принял — на следующую отгрузку в этот кластер."""
+    try:
+        data = json.loads(CARRY.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    data[cluster] = {"date": datetime.now(MSK).strftime("%d.%m.%Y"), "items": rest}
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CARRY.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
 def _merge(markup, rows):

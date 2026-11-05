@@ -275,3 +275,22 @@ def build(plan, path, snap_time=""):
 
     wb.save(path)
     return path
+
+
+def build_supply(take, rest, path):
+    """После записи поставки: что везём (формат загрузки Ozon) и остаток на следующую отгрузку."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Везём"
+    ws.append(["артикул", "имя (необязательно)", "количество"])
+    for o, q in take.items():
+        ws.append([o, None, q])
+    ws2 = wb.create_sheet("Остаток на следующую")
+    ws2.append(["артикул", "не принял склад, шт"])
+    for o, q in rest.items():
+        ws2.append([o, q])
+    for w in (ws, ws2):
+        for c in w[1]:
+            c.font = BOLD
+        w.column_dimensions["A"].width = 28
+    wb.save(path)
