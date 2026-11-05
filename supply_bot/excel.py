@@ -49,41 +49,85 @@ def _sheet(wb, title, header, rows, widths=None):
 
 
 def _boxes(ln):
-    return ", ".join(f"{k}×{s} шт ({name})" for name, s, k in ln.boxes) or "—"
+    # без размеров коробов (решение владельца 05.11.2026): только сколько коробов по сколько штук
+    return ", ".join(f"неполный {s} шт" if name.startswith(PARTIAL) else f"{k}×{s} шт" for name, s, k in ln.boxes) or "—"
 
 
 def _distribution(wb, plan, groups):
     """Лист распределения: {направление: [строки]} — по коробам, итог по каждому направлению."""
     ws = _sheet(wb, "Лист распределения",
-                ["Направление", "Кластер", "Склад приёмки", "Артикул", "Кол-во, шт", "Короб", "Шт в коробе", "Коробов",
+                ["Направление", "Кластер", "Склад приёмки", "Артикул", "Кол-во, шт", "Шт в коробе", "Коробов",
                  "Дата отгрузки", "Приоритет", "Пометки"],
-                [], [30, 26, 28, 28, 11, 14, 11, 9, 13, 11, 50])
+                [], [30, 26, 28, 28, 11, 11, 9, 13, 11, 50])
     for wh, lines in groups.items():
         for ln in sorted(lines, key=lambda x: (-["обычно", "наверх", "срочно"].index(x.priority), -x.qty)):
             if ln.boxes:
                 for name, s, k in ln.boxes:
-                    ws.append([wh, ln.cluster, ln.ship_to, ln.offer, s * k, name, s, k, plan.ship_date, ln.priority, "; ".join(ln.flags)])
+                    ws.append([wh, ln.cluster, ln.ship_to, ln.offer, s * k, f"неполный {s}" if name.startswith(PARTIAL) else s,
+                               k, plan.ship_date, ln.priority, "; ".join(ln.flags)])
                     fill = _fill(ln, name.startswith(PARTIAL))  # неполный короб — вся строка жёлтая
                     if fill:
                         _paint(ws, fill)
             else:
-                ws.append([wh, ln.cluster, ln.ship_to, ln.offer, ln.qty, "нет кванта", None, None, plan.ship_date, ln.priority,
+                ws.append([wh, ln.cluster, ln.ship_to, ln.offer, ln.qty, "нет кванта", None, plan.ship_date, ln.priority,
                            "; ".join(ln.flags)])
                 if _fill(ln):
                     _paint(ws, _fill(ln))
-        row = [f"Итого {wh}", "", "", f"{len(lines)} арт.", sum(x.qty for x in lines), "", "",
+        row = [f"Итого {wh}", "", "", f"{len(lines)} арт.", sum(x.qty for x in lines), "",
                sum(x.box_count for x in lines), "", "", ""]
         ws.append(row)
         for c in ws[ws.max_row]:
             c.font, c.fill = BOLD, TOTAL
         # «Решить / стоп» — серым под итогом, в итог не входят; в скобках потребность, если бы везли
         for x in plan.stopped.get(wh, []):
-            ws.append([wh, lines[0].cluster if lines else wh, "", x["offer"], f"({x['need']})", "—", None, None,
+            ws.append([wh, lines[0].cluster if lines else wh, "", x["offer"], f"({x['need']})", "—", None,
                        None, "не везём", "не везём: " + x["reason"]])
             for c in ws[ws.max_row]:
                 c.fill, c.font = STOP_FILL, STOP_FONT
-    for c in ws["I"][1:]:
+    for c in ws["H"][1:]:
         c.number_format = "DD.MM.YYYY"
+
+
+GREY = PatternFill("solid", fgColor="EFEFEF")
+YELLOW_HEAD = PatternFill("solid", fgColor="FFF2CC")
+
+
+def _order_sheet(wb, plan, lines):
+    """Лист «Заявка» — как в ручных расчётах владельца (05.11.2026): артикул, тип, наименование, рекомендация,
+    пустой столбец «Ручное кол-во», транзит, продано за 14 дн, остатки Ozon и нашего склада. Без размеров коробов."""
+    header = ["Направление", "Артикул", "Тип - категория", "Наименование", "Кол-во рекоменд", "Ручное кол-во",
+              "Транзит", "Продано за 2 недели", "Остатки Ozon", "Остатки наш склад", "Корневой артикул", "Статус",
+              "Коробов", "Дней запаса", "Пометки"]
+    ws = wb.create_sheet("Заявка", 0)
+    ws.append(header)
+    for i, c in enumerate(ws[1], 1):
+        c.font = BOLD
+        c.fill = YELLOW_HEAD if header[i - 1] == "Остатки наш склад" else GREY
+        c.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
+    ws.row_dimensions[1].height = 56
+    for ln in sorted(lines, key=lambda x: (x.warehouse, x.offer)):
+        inf = plan.info.get(ln.offer, {})
+        ws.append([ln.warehouse, ln.offer, inf.get("category"), inf.get("name"), ln.qty, None, ln.transit, ln.sales14,
+                   ln.available, inf.get("free"), inf.get("root"), (inf.get("status") or "").capitalize(),
+                   _boxes(ln), round(ln.days) if ln.days is not None else None, "; ".join(ln.flags)])
+        if _fill(ln):
+            _paint(ws, _fill(ln))
+    for wh in sorted({x.warehouse for x in lines}):
+        for x in plan.stopped.get(wh, []):
+            ws.append([wh, x["offer"], None, None, 0, None, None, None, None, None, None, None, None, None,
+                       "не везём: " + x["reason"]])
+            for c in ws[ws.max_row]:
+                c.fill, c.font = STOP_FILL, STOP_FONT
+    ws.append(["Итого", f"{len(lines)} арт.", None, None, sum(x.qty for x in lines)])
+    for c in ws[ws.max_row]:
+        c.font = BOLD
+    ws.freeze_panes = "C2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(header))}{ws.max_row - 1}"
+    for i, w in enumerate([22, 26, 22, 36, 11, 11, 9, 11, 10, 11, 18, 14, 14, 9, 50], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    for row in ws.iter_rows(min_row=2, max_col=4):
+        for c in row:
+            c.alignment = Alignment(wrap_text=False, vertical="top")
 
 
 def _need(wb, lines, title="Потребность по направлениям"):
@@ -109,6 +153,7 @@ def build_direction(plan, name, path, snap_time=""):
     lines = [x for x in plan.lines if x.warehouse == name and x.qty > 0]
     _distribution(wb, plan, {name: lines})
     _need(wb, lines, "Как посчитано")
+    _order_sheet(wb, plan, lines)
     _sheet(wb, "Параметры", ["Параметр", "Значение"], [
         ["Направление", name],
         ["Снимок данных", snap_time],
@@ -127,6 +172,7 @@ def build(plan, path, snap_time=""):
 
     _distribution(wb, plan, plan.by_warehouse())
     _need(wb, plan.lines)
+    _order_sheet(wb, plan, [x for x in plan.lines if x.qty > 0])
 
     _sheet(wb, "Пустые кластеры",
            ["Кластер", "Артикул", "Продажи 14 дн (весь Ozon)", "Рекомендуемый склад", "Свободно у нас"],

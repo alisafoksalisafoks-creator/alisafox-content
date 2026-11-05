@@ -99,6 +99,7 @@ class Plan:
     duplicates: list = field(default_factory=list)
     ff: dict = field(default_factory=dict)          # {ключ МС: {article, stock, unshipped, free, used}}
     notes: list = field(default_factory=list)
+    info: dict = field(default_factory=dict)        # {артикул: {name, category, status, root, free}} — для листа «Заявка»
     stopped: dict = field(default_factory=dict)     # {кластер: [{offer, need, reason}]} — «Решить / стоп» под итогом кластера
 
     def by_warehouse(self):
@@ -272,6 +273,7 @@ def build(snap, overrides=None):
             cluster_of[r["warehouse"]] = r["cluster"]
 
     offer_name = {norm(r["offer_id"]): r["offer_id"] for r in snap.wh_stocks}
+    ozon_name = {norm(r["offer_id"]): r.get("name", "") for r in snap.wh_stocks if r.get("name")}
     for _d, offer, _s, _w, _q in snap.postings:
         offer_name.setdefault(norm(offer), offer)
     for art, u in snap.unit.items():
@@ -352,6 +354,8 @@ def build(snap, overrides=None):
             plan.season_notes.append({"offer": name, "category": u.get("category"), "k": k, "k_next": k_next})
         bf = 1.0   # выкуп < 85%: с 05.11.2026 скорость снова по заказам, только подсвечиваем (решение владельца)
         eligible[offer] = {"u": u, "k": k, "key": key, "name": name, "warn": warn, "bf": bf}
+        plan.info[name] = {"name": ozon_name.get(offer, ""), "category": u.get("category") or "", "status": u["status"],
+                           "root": u["root"], "free": ms_by[key]["free"]}
 
     # --- направления: кластер целиком, в Москве — основные склады ---
     s14c, s30c, stock_c = defaultdict(float), defaultdict(int), {}
