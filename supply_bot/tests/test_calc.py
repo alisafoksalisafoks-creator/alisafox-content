@@ -248,8 +248,10 @@ def test_need_owner_logic_target_days():
 
 def test_round_qty_owner_rules():
     assert config.round_qty(134, [300, 200, 150, 70]) == (150, 150)   # короб рядом (±25%) — ровно короб
-    assert config.round_qty(80, [50, 20, 10]) == (80, None)             # до 100 — до 10
-    assert config.round_qty(230, [50]) == (250, None)                   # больше 100 — до 50
+    assert config.round_qty(80, [50, 20, 10]) == (80, 20)               # 4 короба по 20
+    assert config.round_qty(80, [300, 200]) == (80, None)               # до 100 — до 10
+    assert config.round_qty(230, [50]) == (250, 50)                     # 5 коробов по 50
+    assert config.round_qty(230, [300]) == (250, None)                  # больше 100 — до 50
     assert config.round_qty(11, [100, 40]) == (30, None)                # минимум 30
 
 
@@ -331,3 +333,8 @@ def test_stuck_supply_not_counted_in_transit():
     # свежая поставка (слот 5 дней назад) — считаем «в пути» как обычно
     s.not_accepted[0]["slot"] = str(TODAY - timedelta(days=5)) + "T14:00:00Z"
     assert not calc.build(s).lines
+
+
+def test_several_big_boxes_preferred():
+    # Москва 05.11, OZ470-MD60: нужно 81, короба 50/20/10 → 2×50, а не 8×10
+    assert config.round_qty(81, [50, 20, 10, 50]) == (100, 50)

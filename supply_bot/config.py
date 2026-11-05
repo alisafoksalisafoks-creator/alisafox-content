@@ -116,6 +116,11 @@ def round_qty(qty, sizes):
     if near:
         best = min(near, key=lambda s: (abs(s - qty), -s))
         return best, best
+    # несколько одинаковых коробов в пределах 25% — берём самый большой короб (05.11.2026: MD60 81 → 2×50, а не 8×10)
+    multi = [(k * s, s) for s in sizes if s > 0 for k in range(2, 11) if abs(k * s - qty) < BOX_NEAR * qty]
+    if multi:
+        q, s = max(multi, key=lambda t: (t[1], -abs(t[0] - qty)))
+        return max(q, MIN_SHIP) if q >= MIN_SHIP else q, s
     if qty <= 100:
         q = int(round(qty / 10.0) * 10)
     else:

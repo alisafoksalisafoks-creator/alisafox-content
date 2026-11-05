@@ -487,16 +487,17 @@ def build(snap, overrides=None):
             continue
         ln.qty = q
         small = min((sz for _, sz in sizes), default=0)
+        fit = max((sz for _, sz in sizes if sz and q % sz == 0), default=0)
         if box:
-            ln.boxes = label_boxes([(box, 1)], sizes)
-        elif small and q % small == 0:   # круглое число ровно в маленьких коробах — так и пишем
-            ln.boxes = label_boxes([(small, q // small)], sizes)
+            ln.boxes = label_boxes([(box, q // box)], sizes)
+        elif fit:   # круглое число ровно в одинаковых коробах — берём самый большой такой короб
+            ln.boxes = label_boxes([(fit, q // fit)], sizes)
         else:
             ln.boxes = []
         d = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
         ln.flags.append((f"скорость по выкупу {ln.bf:.0%}: {ln.eff14:.0f} из {ln.sales14} шт за 14 дн; " if ln.bf < 1 else "")
                         + f"запас {ln.have / d:.0f} дн → везём до {config.target_days(ln.eff14)} дн: нужно {raw}, везём {q}"
-                        + (f" (ровно короб {box})" if box else "") if d else f"нужно {raw}, везём {q}")
+                        + (f" (ровно {'короб' if q == box else f'{q // box} короба по'} {box})" if box else "") if d else f"нужно {raw}, везём {q}")
         if not sizes:
             ln.flags.append("нет кванта коробов")
 
