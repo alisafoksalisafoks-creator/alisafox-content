@@ -347,7 +347,7 @@ def build(snap, overrides=None):
         k_next = season_k(snap, u.get("category"), month % 12 + 1)
         if k < config.SEASON_LOW or (k and k_next < k * (1 - config.SEASON_DROP)):
             plan.season_notes.append({"offer": name, "category": u.get("category"), "k": k, "k_next": k_next})
-        bf = u["buyout"] if warn and warn[0] == "выкуп" else 1.0   # выкуп < 85% — скорость по выкупам (02.11.2026)
+        bf = 1.0   # выкуп < 85%: с 05.11.2026 скорость снова по заказам, только подсвечиваем (решение владельца)
         eligible[offer] = {"u": u, "k": k, "key": key, "name": name, "warn": warn, "bf": bf}
 
     # --- направления: кластер целиком, в Москве — основные склады ---

@@ -302,7 +302,8 @@ def test_low_buyout_speed_by_buyouts():
     s = snap(sales("OZ1", MSK1, 2), stocks=[("OZ1", MSK1, 10, 0)], ms={"OZ1": 1000},
              units={"OZ1": unit("OZ1", buyout=0.5)})
     ln = calc.build(s).lines[0]
-    assert ln.need == 40 and ln.warn == "выкуп" and any("скорость по выкупу 50%" in f for f in ln.flags)
+    # с 05.11.2026 выкуп только подсвечиваем: 28 заказов → 2 шт/дн, до 45 дн: 90 − 10 = 80
+    assert ln.need == 80 and ln.warn == "выкуп" and not any("скорость по выкупу" in f for f in ln.flags)
 
 
 
