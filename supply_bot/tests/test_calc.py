@@ -390,3 +390,8 @@ def test_hit_absent_in_cluster_is_shipped_by_estimate():
                             ("OZ2", MSK1, 100, 0), ("OZ1NEW", KZN, 20, 0)],
               ms={"OZ1": 1000, "OZ2": 1000}, units=units)
     assert not any(ln.absent and ln.cluster == "Казань" for ln in calc.build(s2).lines)
+
+
+def test_far_clusters_wait_longer_before_supply_is_lost():
+    assert config.stuck_days("Дальний Восток") == 45 and config.stuck_days("Екатеринбург") == 30
+    assert config.stuck_days("Казань") == 21

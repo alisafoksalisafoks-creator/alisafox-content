@@ -378,7 +378,7 @@ def build(snap, overrides=None):
         age = (today - date.fromisoformat(sp["slot"][:10])).days
         cl = cluster_of.get(sp.get("warehouse")) or sp.get("cluster")
         closed = sp.get("warehouse") in config.CLOSED_WAREHOUSES
-        if (age <= config.STUCK_DAYS and not closed) or not cl:
+        if (age <= config.stuck_days(cl) and not closed) or not cl:
             continue
         plan.stuck.append({"order": sp["order"], "cluster": cl, "slot": sp["slot"][:10], "days": age,
                            "qty": sum(sp["items"].values())})
