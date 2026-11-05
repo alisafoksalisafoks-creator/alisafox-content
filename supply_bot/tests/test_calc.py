@@ -90,7 +90,8 @@ def test_statuses_buyout_and_paid_storage():
     assert "OZ1" not in reasons                       # «не грузим» — молча не везём
     assert "новинка" in reasons["OZ2"]
     assert by["OZ3"].warn == "выкуп" and "85%" in by["OZ3"].flags[0]
-    assert by["OZ4"].warn == "платное" and "платное хранение с" in by["OZ4"].flags[0] and plan.paid[0]["days"] == 10
+    # платное по артикулу, а в Москве остатка 0 — значит, платное не здесь: не красим, но пишем (05.11.2026)
+    assert by["OZ4"].warn != "платное" and "вероятно платное не здесь" in by["OZ4"].flags[0] and plan.paid[0]["days"] == 10
 
 
 def test_empty_cluster_signal():
@@ -338,3 +339,13 @@ def test_stuck_supply_not_counted_in_transit():
 def test_several_big_boxes_preferred():
     # Москва 05.11, OZ470-MD60: нужно 81, короба 50/20/10 → 2×50, а не 8×10
     assert config.round_qty(81, [50, 20, 10, 50]) == (100, 50)
+
+
+def test_paid_not_red_where_stock_moves_fast():
+    # OZ616-BC56 05.11: платно 10 шт по артикулу, а в Москве 3 шт при 1 продаже в день — не красим
+    paid = {"OZ1": [{"qty": 10, "date": TODAY + timedelta(days=9)}]}
+    s = snap(sales("OZ1", MSK1, 1) + sales("OZ1", KZN, 1, days=2), stocks=[("OZ1", MSK1, 3, 0), ("OZ1", KZN, 60, 0)],
+             ms={"OZ1": 1000}, units={"OZ1": unit("OZ1")}, paid=paid)
+    plan = calc.build(s)
+    msk = [l for l in plan.lines if l.cluster.startswith("Москва")][0]
+    assert msk.warn != "платное" and any("вероятно платное не здесь" in f for f in msk.flags)
