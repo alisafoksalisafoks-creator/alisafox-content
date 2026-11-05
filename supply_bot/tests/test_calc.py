@@ -30,9 +30,9 @@ def snap(postings, stocks=(), ms=None, units=None, paid=None, boxes=None):
         unshipped=[], unit=units or {}, paid=paid or {}, boxes=boxes or {})
 
 
-def test_ship_date_is_next_mon_wed_fri():
+def test_ship_date_is_next_mon_or_thu():
     assert calc.next_ship_date(TODAY) == date(2026, 10, 26)
-    assert calc.next_ship_date(date(2026, 10, 26)) == date(2026, 10, 28)
+    assert calc.next_ship_date(date(2026, 10, 26)) == date(2026, 10, 29)
 
 
 def test_pick_boxes_full_mono_boxes_only():
@@ -207,11 +207,11 @@ def test_wholesale_and_spikes():
     plan = calc.build(snap(usual + [(day(3), "OZ1", "1", MSK1, 40)], ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")}))
     ln = plan.lines[0]
     assert ln.sales14 == 140 and ln.demand == "опт" and "опт: 1 заказ(а) 40 шт" in ln.flags[0]
-    # разовый всплеск: +30 шт за день (40 при обычных 10) — считаем как обычный день
+    # разовый всплеск: +30 шт за день (40 при обычных 10) — с 05.11.2026 считаем по факту, подсвечиваем
     spike = [(day(9), "OZ1", "1", MSK1, 1)] * 30
     plan = calc.build(snap(usual + spike, ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")}))
     ln = plan.lines[0]
-    assert ln.sales14 == 140 and ln.demand == "всплеск" and plan.demand_notes[0]["kind"] == "всплеск"
+    assert ln.sales14 == 170 and ln.demand == "всплеск" and plan.demand_notes[0]["kind"] == "всплеск"
     # два всплеска за последнюю неделю — пошёл спрос: считаем по факту
     grow = [(day(2), "OZ1", "1", MSK1, 1)] * 30 + [(day(5), "OZ1", "1", MSK1, 1)] * 30
     plan = calc.build(snap(usual + grow, ms={"OZ1": 10000}, units={"OZ1": unit("OZ1")}))
@@ -284,12 +284,12 @@ def test_ff_leftover_below_minimum_not_shipped():
 
 def test_orange_with_25_days_waits_for_next_week():
     # Невинномысск 02.11, OZ462: 11 шт за 14 дн, на Ozon 23 (29 дн) → 30 шт дали бы 67 дн — не везём, ждём неделю
-    s = snap(sales("OZ1", MSK1, 1, days=11), stocks=[("OZ1", MSK1, 23, 0)], ms={"OZ1": 1000},
+    s = snap(sales("OZ1", KZN, 1, days=11), stocks=[("OZ1", KZN, 23, 0)], ms={"OZ1": 1000},
              units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("40×30×30", 100)]})
     plan = calc.build(s)
     assert not plan.lines and "следующей поставкой" in plan.small[0]["why"]
     # запас 20 дн (OZ159NEW2) — оранжевый, но везём
-    s = snap(sales("OZ1", MSK1, 1, days=10), stocks=[("OZ1", MSK1, 14, 0)], ms={"OZ1": 1000},
+    s = snap(sales("OZ1", KZN, 1, days=10), stocks=[("OZ1", KZN, 14, 0)], ms={"OZ1": 1000},
              units={"OZ1": unit("OZ1")}, boxes={"OZ1": [("40×30×30", 100)]})
     ln = calc.build(s).lines[0]
     assert ln.qty == 30 and ln.warn == "короб"
@@ -301,3 +301,19 @@ def test_low_buyout_speed_by_buyouts():
              units={"OZ1": unit("OZ1", buyout=0.5)})
     ln = calc.build(s).lines[0]
     assert ln.need == 40 and ln.warn == "выкуп" and any("скорость по выкупу 50%" in f for f in ln.flags)
+
+
+
+def test_moscow_hits_to_37_days_others_below_25():
+    # Москва 05.11: OZ555-UA43TC 113 шт за 14 дн, запас 36 дн — хит, везём; OZ622-Z69A 35 шт, запас 27 дн — ждём пн/чт
+    assert config.need(113, 287, cluster=config.MOSCOW_CLUSTER) > 0
+    assert config.need(35, 68, cluster=config.MOSCOW_CLUSTER) == 0
+    assert config.need(35, 68, cluster="Казань") > 0
+    assert config.need(113, 287, cluster="Казань") == 0
+
+
+def test_moscow_hit_30_37_days_is_yellow():
+    # 50 шт за 14 дн, в Москве 120 (34 дн) — везём, но жёлтым: можно подождать до пн/чт
+    s = snap(sales("OZ1", MSK1, 5, days=10), stocks=[("OZ1", MSK1, 120, 0)], ms={"OZ1": 1000}, units={"OZ1": unit("OZ1")})
+    ln = calc.build(s).lines[0]
+    assert ln.qty > 0 and ln.warn == "ждать"

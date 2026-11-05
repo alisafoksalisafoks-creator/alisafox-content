@@ -16,7 +16,8 @@ DEMAND_FILL = {"опт": PatternFill("solid", fgColor="FFD8A8"), "всплеск
                "рост": PatternFill("solid", fgColor="C6EFCE")}   # опт и всплеск — оранжевый, рост спроса — зелёный
 WARN_FILL = {"платное": PatternFill("solid", fgColor="FFC7CE"),   # платное хранение — красный
              "выкуп": PatternFill("solid", fgColor="E4DFEC"),     # выкуп ниже 85% — сиреневый
-             "короб": PatternFill("solid", fgColor="FCE4D6")}     # после поставки запас больше 60 дн — оранжевый
+             "короб": PatternFill("solid", fgColor="FCE4D6"),     # после поставки запас больше 60 дн — оранжевый
+             "ждать": PatternFill("solid", fgColor="FFF2CC")}     # Москва: хит с запасом 30–37 дн — жёлтый, решает владелец
 
 
 def _fill(ln, partial=False):

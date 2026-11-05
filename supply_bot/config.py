@@ -10,6 +10,9 @@ REF_DAYS = 30            # продажи за 30 дней — справочн�
 # Логика владельца (02.11.2026, выведена из её ручных расчётов по 7 кластерам, заменяет формулу «×2,5»):
 # запас на Ozon от 30 дней — не везём; меньше — довозим до 40 дн (хит, от 40 шт за 14 дн), 45 дн (20–39 шт), 50 дн (меньше 20).
 TRIGGER_DAYS = 30        # запас на Ozon (остаток + в пути) от 30 дней по продажам 14 дн — не везём
+# Москва (05.11.2026): отгрузка 2 раза в неделю (пн и чт). Хиты везём до запаса 37 дн, остальное — при запасе меньше 25 дн
+MOSCOW_CLUSTER = "Москва, МО и Дальние регионы"
+MOSCOW_TRIGGER_HIT, MOSCOW_TRIGGER_OTHER = 37, 25
 HIT_SALES14 = 40         # хит — от 40 шт за 14 дней в кластере
 TARGET_HIT, TARGET_MID, TARGET_SLOW = 40, 45, 50
 MID_SALES14 = 20
@@ -23,7 +26,7 @@ URGENT_HIT_DAYS = 14     # ходовой товар с запасом мень�
 HIT_MIN_PER_DAY = 1.0    # «ходовой» — от 1 шт в день на складе
 ROUND_UP_EXTRA_DAYS = 3  # короб вверх, если запас не больше горизонта + 3 дней
 WHOLESALE_MIN = 10       # заказ от 10 шт одного артикула — опт: в спрос не идёт, подсвечиваем
-SPIKE_RATIO = 2          # день больше 2 × обычный (медиана 14 дней) — всплеск, считаем как обычный день
+SPIKE_RATIO = 2          # день больше 2 × обычный (медиана 14 дней) — всплеск: считаем по факту, подсвечиваем (05.11.2026)
 SPIKE_MIN_DAY = 3        # всплески ищем, только если в обычный день от 3 шт — иначе это шум
 # Не хватает нашего товара на все кластеры (решение владельца 02.11.2026, заменяет 14/7 дней от 26.10):
 # сначала полная потребность СПб и Москвы, затем Ростов, затем Казань, затем остальные — по продажам кластера.
@@ -65,7 +68,7 @@ LOAD = {"грузим", "частично грузим"}
 NO_LOAD = "не грузим"
 NEW = "новинки"
 
-SHIP_WEEKDAYS = (0, 2, 4)  # пн, ср, пт
+SHIP_WEEKDAYS = (0, 3)  # пн и чт (решение владельца 05.11.2026)
 
 # Таблицы владельца — только чтение.
 UNIT_SHEET_ID = os.environ.get("UNIT_SHEET_ID", "1PjwfdbTI47_gQNDelUBkQ8yhsd4i05Te1JjEDoYxA0U")
@@ -85,14 +88,20 @@ def target_days(sales14):
     return TARGET_MID if sales14 >= MID_SALES14 else TARGET_SLOW
 
 
-def need(sales14, have, k=None):
+def trigger_days(sales14, cluster=None):
+    if cluster == MOSCOW_CLUSTER:
+        return MOSCOW_TRIGGER_HIT if sales14 >= HIT_SALES14 else MOSCOW_TRIGGER_OTHER
+    return TRIGGER_DAYS
+
+
+def need(sales14, have, k=None, cluster=None):
     """Потребность кластера по логике владельца: запас от 30 дн — 0; иначе цель (40/45/50 дн) × скорость − (остаток + в пути).
 
     Скорость = продажи 14 дн / 14. Коэффициент сезона в расчёт не входит (k оставлен для совместимости), как в её ручных расчётах."""
     if sales14 <= 0:
         return 0
     speed = sales14 / SALES_DAYS
-    if have / speed >= TRIGGER_DAYS:
+    if have / speed >= trigger_days(sales14, cluster):
         return 0
     return max(1, math.ceil(target_days(sales14) * speed - have))
 

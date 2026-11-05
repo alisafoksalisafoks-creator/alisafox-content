@@ -121,7 +121,7 @@ def demand_spikes(rows, today):
 
     rows: [(день, артикул, склад, шт)] — одна строка = один заказ.
     Опт — заказ от WHOLESALE_MIN шт: в спрос не идёт, артикул подсвечиваем.
-    Всплеск — день за 14 дн больше SPIKE_RATIO × обычный день (медиана 14 дней): считаем его как обычный день.
+    Всплеск — день за 14 дн больше SPIKE_RATIO × обычный день (медиана 14 дней): с 05.11.2026 считаем по факту, только подсвечиваем.
     Всплесков 2 и больше за последние 7 дней — пошёл спрос: всплески оставляем, подсказка «спрос растёт».
     Возвращает ({(артикул, день): доля, которую оставляем}, {артикул: {kind, text}}).
     """
@@ -147,9 +147,8 @@ def demand_spikes(rows, today):
             out[offer] = {"kind": "рост", "text": f"спрос растёт: всплески {what} при обычном дне {usual:g} шт — "
                                                   "считаю по факту, проверьте, не пора ли поднять закупку"}
             continue
-        for d in hot:
-            cut[(offer, d)] = usual / by_day[d]
-        out[offer] = {"kind": "всплеск", "text": f"всплеск {what} — посчитан как обычный день {usual:g} шт"}
+        # с 05.11.2026 всплеск считаем по факту (опт от 10 шт в заказе уже убран) — решение владельца
+        out[offer] = {"kind": "всплеск", "text": f"всплеск {what} при обычном дне {usual:g} шт — посчитан по факту"}
     for offer, items in opt.items():
         what = ", ".join(f"{q} шт {d[8:10]}.{d[5:7]}" for d, q in sorted(items))
         text = f"опт: {len(items)} заказ(а) {what} — в спрос не взят"
@@ -372,7 +371,7 @@ def build(snap, overrides=None):
         st = stock_c.get((offer, cl), zero)
         speed = s14c.get((offer, cl), 0) / config.SALES_DAYS * e["k"]
         lead = config.lead_days(cl)
-        need = config.need(s14c.get((offer, cl), 0) * e["bf"], st["available"] + st["transit"], e["k"])
+        need = config.need(s14c.get((offer, cl), 0) * e["bf"], st["available"] + st["transit"], e["k"], cl)
         lines[(offer, cl)] = Line(
             offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
             sales14=round(s14c.get((offer, cl), 0)), sales30=s30c.get((offer, cl), 0), speed=speed,
@@ -500,6 +499,12 @@ def build(snap, overrides=None):
         for ln in group:
             d = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
             after = (ln.have + ln.qty) / d if d else None
+            before = ln.have / d if d else None
+            if ln.qty and before is not None and before >= config.TRIGGER_DAYS and not ln.warn:
+                # Москва: хит с запасом 30–37 дн — можно и подождать до следующей отгрузки (пн/чт), решает владелец
+                ln.warn = "ждать"
+                ln.flags.append(f"запас {before:.0f} дн (30–{config.MOSCOW_TRIGGER_HIT}): хит в Москве — "
+                                "можно везти сейчас или в следующую отгрузку (пн/чт), решите")
             if ln.qty and after and after > config.SLOW_MAX_DAYS:
                 small = min((sz for _, sz in _sizes(norm(ln.offer), ln.root, snap.boxes)), default=None)
                 if not ln.warn:
@@ -524,7 +529,7 @@ def build(snap, overrides=None):
             o = offer
             sp = s14c.get((o, cl), 0) / config.SALES_DAYS * e["k"]
             st = stock_c.get((o, cl), zero)
-            need += config.need(s14c.get((o, cl), 0) * e.get("bf", 1.0), st["available"] + st["transit"], e["k"])
+            need += config.need(s14c.get((o, cl), 0) * e.get("bf", 1.0), st["available"] + st["transit"], e["k"], cl)
             have += st["available"] + st["transit"]
             speed += sp
         key = _ms_key(offer, snap.unit, ms_by)
@@ -601,7 +606,7 @@ def build(snap, overrides=None):
             if oo != o or not cl:
                 continue
             st = stock_c.get((o, cl), zero)
-            need = config.need(v, st["available"] + st["transit"], 1)
+            need = config.need(v, st["available"] + st["transit"], 1, cl)
             if need > 0:
                 plan.stopped.setdefault(cl, []).append({"offer": x["offer"], "need": need, "reason": x["reason"]})
     for items in plan.stopped.values():
