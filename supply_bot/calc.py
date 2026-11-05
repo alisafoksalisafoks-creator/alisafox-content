@@ -440,6 +440,8 @@ def build(snap, overrides=None):
                     or st["available"] + st["transit"] > 0 or not sold_share or root_in.get((e["u"]["root"], cl)):
                 continue
             est = tot * share / sold_share
+            if est < config.ABSENT_MIN14:
+                continue
             partial = e["u"].get("status") == "частично грузим"
             need = config.need(est, 0, e["k"], cl, partial=partial)
             ln = lines[(offer, cl)] = Line(
