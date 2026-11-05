@@ -339,3 +339,8 @@ def test_stuck_supply_not_counted_in_transit():
 def test_several_big_boxes_preferred():
     # Москва 05.11, OZ470-MD60: нужно 81, короба 50/20/10 → 2×50, а не 8×10
     assert config.round_qty(81, [50, 20, 10, 50]) == (100, 50)
+
+
+def test_smaller_box_ok_up_to_35_percent():
+    # СПб 05.11, OZ522-HB1A: нужно 27, короб 20 — везём 20, довезём в понедельник
+    assert config.round_qty(27, [200, 100, 60, 20]) == (20, 20)

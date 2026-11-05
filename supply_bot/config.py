@@ -107,12 +107,17 @@ def need(sales14, have, k=None, cluster=None):
     return max(1, math.ceil(target_days(sales14) * speed - have))
 
 
+BOX_DOWN = 0.35   # короб меньше расчёта — до 35% (05.11.2026)
+
+
 def round_qty(qty, sizes):
     """Округление по логике владельца: короб из квантов в пределах 25% — ровно короб; иначе до 100 шт — до 10,
     больше — до 50; не меньше 30 шт. Возвращает (шт, размер короба или None)."""
     if qty <= 0:
         return 0, None
-    near = [s for s in sizes if s > 0 and abs(s - qty) <= max(5, BOX_NEAR * qty)]
+    # короб чуть меньше расчёта можно смелее (до 35%): отгрузка 2 раза в неделю, довезём (решение владельца 05.11.2026)
+    near = [s for s in sizes if s > 0 and (abs(s - qty) <= max(5, BOX_NEAR * qty)
+                                           or (s < qty and qty - s <= BOX_DOWN * qty and s >= 20))]
     if near:
         best = min(near, key=lambda s: (abs(s - qty), -s))
         return best, best
