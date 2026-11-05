@@ -385,7 +385,7 @@ def build(snap, overrides=None):
     zero = {"available": 0, "transit": 0}
 
     lines = {}
-    for (offer, cl) in set(s30c) | set(stock_c):
+    for (offer, cl) in sorted(set(s30c) | set(stock_c)):
         if offer not in eligible or not cl:
             continue
         e = eligible[offer]
@@ -553,7 +553,7 @@ def build(snap, overrides=None):
         shipped[offer] += ln.qty
     profits = {norm(k): v for k, v in (getattr(snap, "profit", None) or {}).items()}
     cl_of_offer = defaultdict(set)
-    for (o, cl) in set(s14c) | set(stock_c):
+    for (o, cl) in sorted(set(s14c) | set(stock_c), key=str):
         if cl:
             cl_of_offer[o].add(cl)
     for offer, e in list(eligible.items()) + list(no_stock_k.items()):
@@ -722,7 +722,8 @@ def _fit(group, free, cl_sales):
         cand = [ln for ln in group if ln.boxes]
         if not cand:
             over = sum(ln.qty for ln in group) - free
-            ln = max(group, key=lambda x: x.qty)
+            # снимаем с кластера, который в очереди последний (СПб и Москва — последними)
+            ln = max((x for x in group if x.qty), key=lambda x: (_order(x, cl_sales), x.qty))
             ln.qty = max(0, ln.qty - over)
             continue
         # снимаем с кластера, который в очереди последний (СПб и Москва — последними), среди равных — с самого обеспеченного
