@@ -355,3 +355,20 @@ def test_partial_status_target_35_days():
 def test_small_need_takes_one_small_box():
     assert config.round_qty(9, [20]) == (20, 20)
     assert config.round_qty(9, []) == (30, None)
+
+
+def test_hit_absent_in_cluster_is_shipped_by_estimate():
+    # OZ1 продаётся в Москве и СПб, в Казани его нет совсем; Казань — 25% продаж магазина (05.11.2026)
+    base = sales("OZ1", MSK1, 2) + sales("OZ1", SPB, 2) + sales("OZ2", KZN, 2) + sales("OZ2", MSK1, 2)
+    units = {"OZ1": unit("OZ1"), "OZ2": unit("OZ2")}
+    s = snap(base, stocks=[("OZ1", MSK1, 100, 0), ("OZ1", SPB, 100, 0), ("OZ2", KZN, 100, 0), ("OZ2", MSK1, 100, 0)],
+             ms={"OZ1": 1000, "OZ2": 1000}, units=units)
+    kzn = next(ln for ln in calc.build(s).lines if ln.cluster == "Казань" and ln.offer == "OZ1")
+    # оценка 56 × 0,25 / 0,75 ≈ 19 шт за 14 дн → до 50 дн: 67 → 70
+    assert kzn.absent and kzn.need == 67 and kzn.qty == 70
+    # та же модель другой карточкой уже есть в Казани — «нет в кластере» не считаем
+    units["OZ1NEW"] = unit("OZ1NEW")
+    s2 = snap(base, stocks=[("OZ1", MSK1, 100, 0), ("OZ1", SPB, 100, 0), ("OZ2", KZN, 100, 0),
+                            ("OZ2", MSK1, 100, 0), ("OZ1NEW", KZN, 20, 0)],
+              ms={"OZ1": 1000, "OZ2": 1000}, units=units)
+    assert not any(ln.absent and ln.cluster == "Казань" for ln in calc.build(s2).lines)

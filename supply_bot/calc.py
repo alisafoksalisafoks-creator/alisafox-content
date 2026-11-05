@@ -58,6 +58,7 @@ class Line:
     partial: bool = False     # статус «Частично грузим» — цель 35 дн
     bf: float = 1.0           # доля выкупа, если выкуп < 85%: скорость считаем по выкупам
     warn: str = ""            # «платное» (красный) или «выкуп» (сиреневый) — грузим, но подсвечиваем
+    absent: bool = False      # товара в кластере нет совсем — скорость оценена по другим кластерам
 
     @property
     def eff14(self):
@@ -405,6 +406,48 @@ def build(snap, overrides=None):
             lines[(offer, cl)].warn = e["warn"][0]
             lines[(offer, cl)].flags.append(e["warn"][1])
 
+    # --- ходовой товар, которого в кластере нет совсем (ни остатка, ни продаж за 14 дн): довозим по оценке
+    #     из продаж в других кластерах (решение владельца 05.11.2026). Оценка = продажи артикула за 14 дн ×
+    #     доля кластера / доля кластеров, где артикул продавался. ---
+    cl_s14 = defaultdict(float)
+    for (_o, cl), v in s14c.items():
+        if cl:
+            cl_s14[cl] += v
+    shop14 = sum(cl_s14.values()) or 1
+    all_cl = sorted(set(cluster_of.values()) - {""})
+    root_in = defaultdict(float)   # модель (корневой артикул) уже есть в кластере другой карточкой — не считаем «нет»
+    for (o, cl), st in stock_c.items():
+        if o in eligible:
+            root_in[(eligible[o]["u"]["root"], cl)] += st["available"] + st["transit"]
+    for (o, cl), v in s14c.items():
+        if o in eligible:
+            root_in[(eligible[o]["u"]["root"], cl)] += v
+    for offer, e in eligible.items():
+        tot = sum(v for (o, cl), v in s14c.items() if o == offer and cl)
+        if tot / config.SALES_DAYS < config.HIT_MIN_PER_DAY:
+            continue
+        sold_share = sum(cl_s14[cl] for (o, cl), v in s14c.items() if o == offer and cl and v > 0) / shop14
+        for cl in all_cl:
+            share = cl_s14.get(cl, 0) / shop14
+            st = stock_c.get((offer, cl), zero)
+            if share < config.EMPTY_CLUSTER_MIN_SHARE or s14c.get((offer, cl), 0) > 0 \
+                    or st["available"] + st["transit"] > 0 or not sold_share or root_in.get((e["u"]["root"], cl)):
+                continue
+            est = tot * share / sold_share
+            partial = e["u"].get("status") == "частично грузим"
+            need = config.need(est, 0, e["k"], cl, partial=partial)
+            ln = lines[(offer, cl)] = Line(
+                offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
+                sales14=0, sales30=s30c.get((offer, cl), 0), speed=est / config.SALES_DAYS * e["k"],
+                available=0, transit=0, lead=config.lead_days(cl), need=need, season=e["k"], bf=e["bf"],
+                partial=partial)
+            ln.flags.append(f"в кластере нет: по продажам в других кластерах ждём ~{est:.0f} шт за 14 дн (оценка)")
+            ln.absent = True
+            ln.priority = "наверх"
+            if e.get("warn"):
+                ln.warn = e["warn"][0]
+                ln.flags.append(e["warn"][1])
+
     for (offer, _cl), ln in lines.items():
         if offer in demand:
             ln.demand = demand[offer]["kind"]
@@ -476,6 +519,14 @@ def build(snap, overrides=None):
         bigger = sorted(sz for _, sz in sizes if sz >= raw)
         if ln.have <= 0 and bigger:   # на Ozon 0 — ближайший полный короб (решение владельца 02.11.2026)
             q, box = bigger[0], bigger[0]
+        if ln.absent and ln.speed:
+            if q / ln.speed > config.SKIP_AFTER_DAYS:   # полный короб слишком велик — пробуем круглое число
+                q, box = config.round_qty(raw, [sz for _, sz in sizes])
+            if q / ln.speed > config.SKIP_AFTER_DAYS:
+                ln.flags.append(f"не везём: {q} шт хватит на {q / ln.speed:.0f} дн по оценке "
+                                f"(больше {config.SKIP_AFTER_DAYS})")
+                ln.qty, ln.boxes = 0, []
+                continue
         d0 = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
         if d0 and ln.have > 0 and ln.have / d0 >= config.ORANGE_WAIT_DAYS and (ln.have + q) / d0 > config.SLOW_MAX_DAYS:
             # оранжевая строка, а запаса ещё от 25 дн — ждём неделю, довезём больше (решение владельца 02.11.2026)
