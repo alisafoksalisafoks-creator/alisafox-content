@@ -55,6 +55,7 @@ class Line:
     ship_to: str = ""         # склад приёмки — подсказка: наш основной склад кластера
     demand: str = ""          # «опт», «всплеск» или «рост» — строку подсвечиваем
     main: bool = False        # приоритетный кластер артикула при нехватке нашего склада
+    partial: bool = False     # статус «Частично грузим» — цель 35 дн
     bf: float = 1.0           # доля выкупа, если выкуп < 85%: скорость считаем по выкупам
     warn: str = ""            # «платное» (красный) или «выкуп» (сиреневый) — грузим, но подсвечиваем
 
@@ -392,11 +393,13 @@ def build(snap, overrides=None):
         st = stock_c.get((offer, cl), zero)
         speed = s14c.get((offer, cl), 0) / config.SALES_DAYS * e["k"]
         lead = config.lead_days(cl)
-        need = config.need(s14c.get((offer, cl), 0) * e["bf"], st["available"] + st["transit"], e["k"], cl)
+        need = config.need(s14c.get((offer, cl), 0) * e["bf"], st["available"] + st["transit"], e["k"], cl,
+                           partial=e["u"].get("status") == "частично грузим")
         lines[(offer, cl)] = Line(
             offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
             sales14=round(s14c.get((offer, cl), 0)), sales30=s30c.get((offer, cl), 0), speed=speed,
-            available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"], bf=e["bf"])
+            available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"], bf=e["bf"],
+            partial=e["u"].get("status") == "частично грузим")
         lines[(offer, cl)].flags += stuck_cut.get((offer, cl), [])
         if e.get("warn"):
             lines[(offer, cl)].warn = e["warn"][0]
@@ -496,7 +499,8 @@ def build(snap, overrides=None):
             ln.boxes = []
         d = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
         ln.flags.append((f"скорость по выкупу {ln.bf:.0%}: {ln.eff14:.0f} из {ln.sales14} шт за 14 дн; " if ln.bf < 1 else "")
-                        + f"запас {ln.have / d:.0f} дн → везём до {config.target_days(ln.eff14)} дн: нужно {raw}, везём {q}"
+                        + f"запас {ln.have / d:.0f} дн → везём до {config.TARGET_PARTIAL if ln.partial else config.target_days(ln.eff14)} дн"
+                        + (" («частично грузим»)" if ln.partial else "") + f": нужно {raw}, везём {q}"
                         + (f" (ровно {'короб' if q == box else f'{q // box} короба по'} {box})" if box else "") if d else f"нужно {raw}, везём {q}")
         if not sizes:
             ln.flags.append("нет кванта коробов")
@@ -552,7 +556,8 @@ def build(snap, overrides=None):
             o = offer
             sp = s14c.get((o, cl), 0) / config.SALES_DAYS * e["k"]
             st = stock_c.get((o, cl), zero)
-            need += config.need(s14c.get((o, cl), 0) * e.get("bf", 1.0), st["available"] + st["transit"], e["k"], cl)
+            need += config.need(s14c.get((o, cl), 0) * e.get("bf", 1.0), st["available"] + st["transit"], e["k"], cl,
+                                    partial=e["u"].get("status") == "частично грузим")
             have += st["available"] + st["transit"]
             speed += sp
         key = _ms_key(offer, snap.unit, ms_by)

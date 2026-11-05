@@ -20,6 +20,7 @@ MIN_SHIP = 30            # меньше 30 шт в кластер не вози�
 BOX_NEAR = 0.25          # короб из квантов в пределах 25% от нужного — везём ровно короб
 SLOW_MAX_DAYS = 60       # после поставки запаса больше 60 дней — оранжевая подсветка, решает владелец
 STUCK_DAYS = 21          # поставка не принята Ozon больше 21 дня после слота — считаем потерянной, в «в пути» не берём (05.11.2026)
+TARGET_PARTIAL = 35      # статус «Частично грузим» — довозим до 35 дн, остальное в следующую отгрузку (05.11.2026)
 SKIP_AFTER_DAYS = 80     # после поставки запаса было бы больше 80 дней — не везём (решение владельца 02.11.2026)
 ORANGE_WAIT_DAYS = 25    # оранжевая строка при запасе от 25 дн — не везём, ждём неделю (02.11.2026)
 TARGET_DAYS = TARGET_MID  # для подписей и проверки ручных правок
@@ -95,7 +96,7 @@ def trigger_days(sales14, cluster=None):
     return TRIGGER_DAYS
 
 
-def need(sales14, have, k=None, cluster=None):
+def need(sales14, have, k=None, cluster=None, partial=False):
     """Потребность кластера по логике владельца: запас от 30 дн — 0; иначе цель (40/45/50 дн) × скорость − (остаток + в пути).
 
     Скорость = продажи 14 дн / 14. Коэффициент сезона в расчёт не входит (k оставлен для совместимости), как в её ручных расчётах."""
@@ -104,7 +105,8 @@ def need(sales14, have, k=None, cluster=None):
     speed = sales14 / SALES_DAYS
     if have / speed >= trigger_days(sales14, cluster):
         return 0
-    return max(1, math.ceil(target_days(sales14) * speed - have))
+    target = TARGET_PARTIAL if partial else target_days(sales14)
+    return max(0, math.ceil(target * speed - have))
 
 
 BOX_DOWN = 0.35   # короб меньше расчёта — до 35% (05.11.2026)
@@ -126,6 +128,10 @@ def round_qty(qty, sizes):
     if multi:
         q, s = max(multi, key=lambda t: (t[1], -abs(t[0] - qty)))
         return max(q, MIN_SHIP) if q >= MIN_SHIP else q, s
+    # мало нужно, а есть короб меньше 30 шт — везём один короб, а не 30 (05.11.2026: OZ522-HB1A — 1 короб 20)
+    small = [s for s in sizes if s > 0 and qty <= s < MIN_SHIP]
+    if small:
+        return min(small), min(small)
     if qty <= 100:
         q = int(round(qty / 10.0) * 10)
     else:

@@ -344,3 +344,14 @@ def test_several_big_boxes_preferred():
 def test_smaller_box_ok_up_to_35_percent():
     # СПб 05.11, OZ522-HB1A: нужно 27, короб 20 — везём 20, довезём в понедельник
     assert config.round_qty(27, [200, 100, 60, 20]) == (20, 20)
+
+
+def test_partial_status_target_35_days():
+    # СПб 05.11, OZ560-GA3 «частично грузим»: 18 шт за 14 дн, на Ozon 22 → до 35 дн: 23 → короб 25
+    assert config.need(18, 22, partial=True) == 23
+    assert config.round_qty(23, [25]) == (25, 25)
+
+
+def test_small_need_takes_one_small_box():
+    assert config.round_qty(9, [20]) == (20, 20)
+    assert config.round_qty(9, []) == (30, None)
