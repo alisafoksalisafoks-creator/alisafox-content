@@ -99,6 +99,7 @@ class Plan:
     duplicates: list = field(default_factory=list)
     ff: dict = field(default_factory=dict)          # {ключ МС: {article, stock, unshipped, free, used}}
     notes: list = field(default_factory=list)
+    zero: list = field(default_factory=list)        # строки с рекомендацией 0 и причина — лист «Ноль, проверить»
     info: dict = field(default_factory=dict)        # {артикул: {name, category, status, root, free}} — для листа «Заявка»
     stopped: dict = field(default_factory=dict)     # {кластер: [{offer, need, reason}]} — «Решить / стоп» под итогом кластера
 
@@ -658,6 +659,37 @@ def build(snap, overrides=None):
                   for ln in lines.values() if ln.need > 0 and ln.qty == 0 and not ln.manual]
     plan.lines = sorted((ln for ln in lines.values() if ln.qty > 0 or ln.manual),
                         key=lambda x: (_prio_rank(x.priority) * -1, x.warehouse, -x.qty))
+
+    # --- нулевые рекомендации с причиной: владелец перепроверяет (05.11.2026) ---
+    for (offer, cl), ln in sorted(lines.items(), key=lambda t: (t[1].warehouse, t[1].offer)):
+        if ln.qty > 0 or ln.manual:
+            continue
+        if ln.need <= 0:
+            d = ln.have / (ln.eff14 / config.SALES_DAYS) if ln.eff14 else None   # дни как в правиле «от 30 дн не везём»
+            why = (f"запас {d:.0f} дн — от {config.trigger_days(ln.eff14, cl)} дн не везём" if d is not None
+                   else "нет продаж за 14 дн")
+        else:
+            why = next((f for f in ln.flags if f.startswith("не везём")), "") or \
+                next((x["why"] for x in plan.small if x["offer"] == ln.offer and x["warehouse"] == ln.warehouse), "") or \
+                f"нужно {ln.need}, не попало в план"
+        dd = ln.have / (ln.eff14 / config.SALES_DAYS) if ln.eff14 else None
+        plan.zero.append({"warehouse": ln.warehouse, "line": ln, "status": eligible[offer]["u"]["status"], "why": why,
+                          "days": round(dd) if dd is not None else None})
+    for (offer, cl) in sorted(set(s14c) | set(stock_c)):
+        if not cl or offer in eligible:
+            continue
+        u = snap.unit.get(offer)
+        st = stock_c.get((offer, cl), zero)
+        v = s14c.get((offer, cl), 0)
+        if not v and not st["available"] + st["transit"]:
+            continue
+        status = (u or {}).get("status") or "нет статуса"
+        why = next((x["reason"] for x in plan.decide if norm(x["offer"]) == offer), "") or f"статус «{status}»"
+        if offer in no_stock_k:
+            why = "на нашем складе 0"
+        plan.zero.append({"warehouse": cl, "offer": offer_name.get(offer, offer), "status": status, "why": why,
+                          "sales14": round(v), "available": st["available"], "transit": st["transit"],
+                          "category": (u or {}).get("category") or "", "root": (u or {}).get("root") or ""})
 
     # --- кластеры, где нашего товара нет ни на одном складе ---
     # 1) кластер целиком пуст: ни одного нашего товара ни на одном складе кластера;

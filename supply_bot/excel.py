@@ -130,6 +130,38 @@ def _order_sheet(wb, plan, lines):
             c.alignment = Alignment(wrap_text=False, vertical="top")
 
 
+def _zero_sheet(wb, plan, directions=None):
+    """Лист «Ноль — проверить»: всё, что бот не везёт, с причиной (решение владельца 05.11.2026)."""
+    header = ["Направление", "Артикул", "Тип - категория", "Кол-во рекоменд", "Ручное кол-во", "Транзит",
+              "Продано за 2 недели", "Остатки Ozon", "Остатки наш склад", "Корневой артикул", "Статус",
+              "Дней запаса", "Почему 0"]
+    ws = wb.create_sheet("Ноль — проверить", 1)
+    ws.append(header)
+    for i, c in enumerate(ws[1], 1):
+        c.font = BOLD
+        c.fill = YELLOW_HEAD if header[i - 1] == "Остатки наш склад" else GREY
+        c.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
+    ws.row_dimensions[1].height = 56
+    for z in plan.zero:
+        if directions is not None and z["warehouse"] not in directions:
+            continue
+        ln = z.get("line")
+        if ln is not None:
+            inf = plan.info.get(ln.offer, {})
+            ws.append([z["warehouse"], ln.offer, inf.get("category"), 0, None, ln.transit, ln.sales14, ln.available,
+                       inf.get("free"), inf.get("root"), (z["status"] or "").capitalize(),
+                       z["days"], z["why"]])
+        else:
+            sp = z["sales14"] / config.SALES_DAYS
+            ws.append([z["warehouse"], z["offer"], z["category"], 0, None, z["transit"], z["sales14"], z["available"],
+                       None, z["root"], (z["status"] or "").capitalize(),
+                       round((z["available"] + z["transit"]) / sp) if sp else None, z["why"]])
+    ws.freeze_panes = "C2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(header))}{max(ws.max_row, 2)}"
+    for i, w in enumerate([22, 26, 22, 11, 11, 9, 11, 10, 11, 18, 14, 9, 50], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+
 def _need(wb, lines, title="Потребность по направлениям"):
     """Весь расчёт по строкам: из чего получилась потребность и сколько везём."""
     ws = _sheet(wb, title,
@@ -154,6 +186,7 @@ def build_direction(plan, name, path, snap_time=""):
     _distribution(wb, plan, {name: lines})
     _need(wb, lines, "Как посчитано")
     _order_sheet(wb, plan, lines)
+    _zero_sheet(wb, plan, {name})
     _sheet(wb, "Параметры", ["Параметр", "Значение"], [
         ["Направление", name],
         ["Снимок данных", snap_time],
@@ -173,6 +206,7 @@ def build(plan, path, snap_time=""):
     _distribution(wb, plan, plan.by_warehouse())
     _need(wb, plan.lines)
     _order_sheet(wb, plan, [x for x in plan.lines if x.qty > 0])
+    _zero_sheet(wb, plan)
 
     _sheet(wb, "Пустые кластеры",
            ["Кластер", "Артикул", "Продажи 14 дн (весь Ozon)", "Рекомендуемый склад", "Свободно у нас"],
