@@ -399,19 +399,8 @@ def build(snap, overrides=None):
             available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"], bf=e["bf"])
         lines[(offer, cl)].flags += stuck_cut.get((offer, cl), [])
         if e.get("warn"):
-            ln0 = lines[(offer, cl)]
-            sp = s14c.get((offer, cl), 0) / config.SALES_DAYS
-            fast = sp and st["available"] / sp < config.PAID_CLUSTER_DAYS
-            if e["warn"][0] == "платное" and fast:
-                # лист «СКОРО ПЛАТНО» — по артикулу, без склада; здесь товар уходит быстро — красным не красим (05.11.2026)
-                ln0.flags.append(e["warn"][1].split(";")[0] + " — это по всему Ozon; в этом кластере остаток уходит за "
-                                 f"{st['available'] / sp:.0f} дн, вероятно платное не здесь")
-                if e["bf"] < 1:
-                    ln0.warn = "выкуп"
-                    ln0.flags.append(f"выкуп {e['bf']:.0%} < 85% — проверьте товар")
-            else:
-                ln0.warn = e["warn"][0]
-                ln0.flags.append(e["warn"][1])
+            lines[(offer, cl)].warn = e["warn"][0]
+            lines[(offer, cl)].flags.append(e["warn"][1])
 
     for (offer, _cl), ln in lines.items():
         if offer in demand:
