@@ -93,9 +93,9 @@ YELLOW_HEAD = PatternFill("solid", fgColor="FFF2CC")
 
 
 def _order_sheet(wb, plan, lines):
-    """Лист «Заявка» — как в ручных расчётах владельца (05.11.2026): артикул, тип, наименование, рекомендация,
+    """Лист «Заявка» — как в ручных расчётах владельца (05.11.2026): артикул, тип, рекомендация,
     пустой столбец «Ручное кол-во», транзит, продано за 14 дн, остатки Ozon и нашего склада. Без размеров коробов."""
-    header = ["Направление", "Артикул", "Тип - категория", "Наименование", "Кол-во рекоменд", "Ручное кол-во",
+    header = ["Направление", "Артикул", "Тип - категория", "Кол-во рекоменд", "Ручное кол-во",
               "Транзит", "Продано за 2 недели", "Остатки Ozon", "Остатки наш склад", "Корневой артикул", "Статус",
               "Коробов", "Дней запаса", "Пометки"]
     ws = wb.create_sheet("Заявка", 0)
@@ -107,25 +107,25 @@ def _order_sheet(wb, plan, lines):
     ws.row_dimensions[1].height = 56
     for ln in sorted(lines, key=lambda x: (x.warehouse, x.offer)):
         inf = plan.info.get(ln.offer, {})
-        ws.append([ln.warehouse, ln.offer, inf.get("category"), inf.get("name"), ln.qty, None, ln.transit, ln.sales14,
+        ws.append([ln.warehouse, ln.offer, inf.get("category"), ln.qty, None, ln.transit, ln.sales14,
                    ln.available, inf.get("free"), inf.get("root"), (inf.get("status") or "").capitalize(),
                    _boxes(ln), round(ln.days) if ln.days is not None else None, "; ".join(ln.flags)])
         if _fill(ln):
             _paint(ws, _fill(ln))
     for wh in sorted({x.warehouse for x in lines}):
         for x in plan.stopped.get(wh, []):
-            ws.append([wh, x["offer"], None, None, 0, None, None, None, None, None, None, None, None, None,
+            ws.append([wh, x["offer"], None, 0, None, None, None, None, None, None, None, None, None,
                        "не везём: " + x["reason"]])
             for c in ws[ws.max_row]:
                 c.fill, c.font = STOP_FILL, STOP_FONT
-    ws.append(["Итого", f"{len(lines)} арт.", None, None, sum(x.qty for x in lines)])
+    ws.append(["Итого", f"{len(lines)} арт.", None, sum(x.qty for x in lines)])
     for c in ws[ws.max_row]:
         c.font = BOLD
     ws.freeze_panes = "C2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(header))}{ws.max_row - 1}"
-    for i, w in enumerate([22, 26, 22, 36, 11, 11, 9, 11, 10, 11, 18, 14, 14, 9, 50], 1):
+    for i, w in enumerate([22, 26, 22, 11, 11, 9, 11, 10, 11, 18, 14, 14, 9, 50], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
-    for row in ws.iter_rows(min_row=2, max_col=4):
+    for row in ws.iter_rows(min_row=2, max_col=3):
         for c in row:
             c.alignment = Alignment(wrap_text=False, vertical="top")
 
