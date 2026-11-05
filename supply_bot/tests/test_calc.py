@@ -317,3 +317,17 @@ def test_moscow_hit_30_37_days_is_yellow():
     s = snap(sales("OZ1", MSK1, 5, days=10), stocks=[("OZ1", MSK1, 120, 0)], ms={"OZ1": 1000}, units={"OZ1": unit("OZ1")})
     ln = calc.build(s).lines[0]
     assert ln.qty > 0 and ln.warn == "ждать"
+
+
+def test_stuck_supply_not_counted_in_transit():
+    # Москва 05.11: поставка 2000065989644 со слотом 10.09 висит на приёмке — её «в пути» не считаем
+    s = snap(sales("OZ1", KZN, 3), stocks=[("OZ1", KZN, 20, 100)], ms={"OZ1": 1000}, units={"OZ1": unit("OZ1")})
+    s.not_accepted = [{"order": "200", "warehouse": "", "cluster": "Казань", "state": "ACCEPTANCE_AT_STORAGE_WAREHOUSE",
+                       "slot": str(TODAY - timedelta(days=40)) + "T14:00:00Z", "items": {"OZ1": 100}}]
+    plan = calc.build(s)
+    ln = plan.lines[0]
+    assert ln.transit == 0 and ln.qty > 0 and any("не принята" in f for f in ln.flags)
+    assert plan.stuck[0]["order"] == "200"
+    # свежая поставка (слот 5 дней назад) — считаем «в пути» как обычно
+    s.not_accepted[0]["slot"] = str(TODAY - timedelta(days=5)) + "T14:00:00Z"
+    assert not calc.build(s).lines

@@ -57,6 +57,9 @@ def summary(plan, taken_at=""):
         lines.append(f"Решить / стоп: {len(plan.decide)} арт.")
     if plan.paid:
         lines.append(f"🟥 Платное хранение ≤ 28 дн: {len(plan.paid)} арт. — грузим, строки красные.")
+    for st in getattr(plan, "stuck", []):
+        lines.append(f"⚠️ Поставка {st['order']} ({st['cluster']}, {st['qty']} шт) не принята Ozon с "
+                     f"{st['slot'][8:10]}.{st['slot'][5:7]} — {st['days']} дн. В «в пути» не считаю, напишите в поддержку.")
     if plan.demand_notes:
         n = {k: sum(1 for x in plan.demand_notes if x["kind"] == k) for k in ("опт", "всплеск", "рост")}
         if n["опт"] or n["всплеск"]:

@@ -7,6 +7,8 @@ import httpx
 
 BASE = "https://api-seller.ozon.ru"
 UNSHIPPED_STATES = ["DATA_FILLING", "READY_TO_SUPPLY"]
+# уехали с нашего склада, но Ozon ещё не принял — такие, если висят долго, бот не считает «в пути» (05.11.2026)
+NOT_ACCEPTED_STATES = ["IN_TRANSIT", "ACCEPTED_AT_SUPPLY_WAREHOUSE", "ACCEPTANCE_AT_STORAGE_WAREHOUSE"]
 
 
 class OzonClient:
@@ -92,10 +94,21 @@ class OzonClient:
 
     def unshipped_supplies(self):
         """Заявки, которые ещё не уехали с нашего склада: [{order, warehouse, state, slot, items}]."""
+        return self.supplies(UNSHIPPED_STATES)
+
+    def not_accepted_supplies(self):
+        """Заявки в пути или на приёмке Ozon: [{order, warehouse, cluster, state, slot, items}]."""
+        macro = {}
+        res = self.post("/v1/cluster/list", {"cluster_type": "CLUSTER_TYPE_OZON"})
+        for c in res.get("clusters", []):
+            macro[str(c.get("macrolocal_cluster_id"))] = c.get("name", "")
+        return self.supplies(NOT_ACCEPTED_STATES, macro)
+
+    def supplies(self, states, macro=None):
         ids, last = [], ""
         while True:
             res = self.post("/v3/supply-order/list", {
-                "filter": {"states": UNSHIPPED_STATES}, "limit": 100,
+                "filter": {"states": states}, "limit": 100,
                 "sort_by": 1, "sort_dir": "DESC", "last_id": last})
             ids += res.get("order_ids", [])
             last = res.get("last_id") or ""
@@ -111,6 +124,7 @@ class OzonClient:
                         "order": o.get("order_number"), "state": o.get("state"),
                         "warehouse": (s.get("storage_warehouse") or {}).get("name", ""),
                         "slot": slot, "items": self._bundle(s.get("bundle_id")),
+                        "cluster": (macro or {}).get(str(s.get("macrolocal_cluster_id")), ""),
                     })
         return out
 

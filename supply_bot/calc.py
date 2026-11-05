@@ -30,6 +30,7 @@ class Snapshot:
     season: dict = field(default_factory=dict)   # {категория: {месяц 1..12: коэф}}
     profit: dict = field(default_factory=dict)   # {offer: {per_unit, profit, units, revenue}} — profit.py
     taken_at: str = ""
+    not_accepted: list = field(default_factory=list)  # [{order, warehouse, cluster, state, slot, items}] — в пути / на приёмке
 
 
 @dataclass
@@ -88,6 +89,7 @@ class Plan:
     empty_whole: list = field(default_factory=list)
     small: list = field(default_factory=list)      # потребность меньше короба или не хватило остатка
     paid: list = field(default_factory=list)
+    stuck: list = field(default_factory=list)       # [{order, cluster, slot, days, qty}] — висят на приёмке, в «в пути» не берём
     fbo_fbs: list = field(default_factory=list)
     season_notes: list = field(default_factory=list)
     demand_notes: list = field(default_factory=list)  # [{offer, kind, text}] — опт, всплески, рост спроса
@@ -360,6 +362,25 @@ def build(snap, overrides=None):
         rec = stock_c.setdefault((offer, cluster_of.get(wh, "")), {"available": 0, "transit": 0})
         rec["available"] += st["available"]
         rec["transit"] += st["transit"]
+    # --- поставки, которые Ozon не принял больше STUCK_DAYS после слота: считаем потерянными (решение владельца 05.11.2026) ---
+    stuck_cut = defaultdict(list)
+    for sp in getattr(snap, "not_accepted", None) or []:
+        if not sp.get("slot"):
+            continue
+        age = (today - date.fromisoformat(sp["slot"][:10])).days
+        cl = cluster_of.get(sp.get("warehouse")) or sp.get("cluster")
+        if age <= config.STUCK_DAYS or not cl:
+            continue
+        plan.stuck.append({"order": sp["order"], "cluster": cl, "slot": sp["slot"][:10], "days": age,
+                           "qty": sum(sp["items"].values())})
+        for o, q in sp["items"].items():
+            rec = stock_c.get((norm(o), cl))
+            if rec:
+                cut = min(q, rec["transit"])
+                rec["transit"] -= cut
+                if cut:
+                    stuck_cut[(norm(o), cl)].append(f"из «в пути» убрала {cut} шт: поставка {sp['order']} не принята "
+                                                    f"Ozon с {sp['slot'][8:10]}.{sp['slot'][5:7]} ({age} дн) — напишите в поддержку")
     top_wh = {cl: max(items)[1] for cl, items in by_cluster.items() if items}
     zero = {"available": 0, "transit": 0}
 
@@ -376,6 +397,7 @@ def build(snap, overrides=None):
             offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
             sales14=round(s14c.get((offer, cl), 0)), sales30=s30c.get((offer, cl), 0), speed=speed,
             available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"], bf=e["bf"])
+        lines[(offer, cl)].flags += stuck_cut.get((offer, cl), [])
         if e.get("warn"):
             lines[(offer, cl)].warn = e["warn"][0]
             lines[(offer, cl)].flags.append(e["warn"][1])

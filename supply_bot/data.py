@@ -77,6 +77,12 @@ def collect(log=print, today=None):
     except Exception as e:  # noqa: BLE001 — без заявок считаем, но предупреждаем
         log(f"Не удалось получить заявки: {e}")
         unshipped = []
+    log("Ozon: поставки в пути и на приёмке")
+    try:
+        not_accepted = oz.not_accepted_supplies()
+    except Exception as e:  # noqa: BLE001
+        log(f"Не удалось получить поставки на приёмке: {e}")
+        not_accepted = []
     log("«Мой склад»: остатки")
     ms_rows = ms.stock(config.MS_STORE)
     try:
@@ -91,4 +97,4 @@ def collect(log=print, today=None):
     boxes = sheets.load_boxes()
     return Snapshot(today=today, postings=post, wh_stocks=wh_stocks, wh_cluster=wh_cluster,
                     product_stocks=prod, ms=ms_rows, unshipped=unshipped, unit=unit, paid=paid,
-                    boxes=boxes, season=load_season(), profit=profits, taken_at=datetime.now(MSK).strftime("%d.%m.%Y %H:%M"))
+                    boxes=boxes, season=load_season(), profit=profits, not_accepted=not_accepted, taken_at=datetime.now(MSK).strftime("%d.%m.%Y %H:%M"))
