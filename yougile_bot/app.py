@@ -48,6 +48,7 @@ INPUT_BTN = "✍️ Ввод"
 COMPANY_BTN = "🏢 Итоги дня компании"
 ACCESS_BTN = "👥 Добавить пользователя"
 OVERDUE_BTN = "⏰ Просрочки"
+CHAT_BTN = "💬 Написать в чат"
 WEEK_BTN = "📈 Неделя"
 MORNING = os.environ.get("YG_MORNING", "09:00")  # автоотчёт: итоги вчера и просрочки
 IDLE_CHECK = os.environ.get("YG_IDLE_CHECK", "11:00")  # сигнал «нет активности»
@@ -68,7 +69,8 @@ def full(uid):
 def menu(uid=0):
     rows = [[KeyboardButton(text=DATE_BTN), KeyboardButton(text=PERSONAL_BTN)],
             [KeyboardButton(text=INPUT_BTN), KeyboardButton(text=COMPANY_BTN)],
-            [KeyboardButton(text=OVERDUE_BTN), KeyboardButton(text=WEEK_BTN)]]
+            [KeyboardButton(text=OVERDUE_BTN), KeyboardButton(text=WEEK_BTN)],
+            [KeyboardButton(text=CHAT_BTN)]]
     if uid == OWNER:
         rows.append([KeyboardButton(text=ACCESS_BTN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
@@ -167,6 +169,7 @@ async def start(msg: Message):
                      "Любое действие словами («поставь Веронике задачу до пятницы…») — «Ввод».", reply_markup=menu(uid))
     await msg.answer("Что открыть?", reply_markup=kb([[(DATE_BTN, "pick"), (PERSONAL_BTN, "me")],
                                                        [(INPUT_BTN, "in"), (COMPANY_BTN, f"co:{today()}")],
+                                                       [(CHAT_BTN, "wch")],
                                                        [(ACCESS_BTN, "acc:list")] if uid == OWNER else []]))
 
 
@@ -850,6 +853,120 @@ async def on_cancel(cb: CallbackQuery):
     drafts.pop(cb.message.chat.id, None)
     await cb.answer("Отменено")
     await cb.message.edit_reply_markup(reply_markup=None)
+
+
+# --- написать в чат ---
+
+DM_PREFIX = "Личное: "
+
+
+@dp.message(F.text == CHAT_BTN)
+async def chat_btn(msg: Message):
+    if not full(msg.from_user.id):
+        return await msg.answer("Писать в чаты можно с полным доступом. Попросите владельца.")
+    await chat_menu(msg)
+
+
+@dp.callback_query(F.data == "wch")
+async def on_chat_menu(cb: CallbackQuery):
+    if not full(cb.from_user.id):
+        return await cb.answer("Нужен полный доступ", show_alert=True)
+    await cb.answer()
+    await chat_menu(cb.message)
+
+
+async def chat_menu(msg: Message):
+    """Групповые чаты, где есть владелец ключа, и люди для «личного» сообщения."""
+    me = (await yg.me())["id"]
+    chats = [c for c in await yg.group_chats()
+             if not c.get("deleted") and me in (c.get("users") or {me: 1}) and not (c.get("title") or "").startswith(DM_PREFIX)]
+    rows = [[(f"👥 {report.clean(c.get('title'), 30)}", f"wc:{c['id']}")] for c in chats]
+    people = [(u["id"], mapping().get(u["id"], {}).get("name") or report.short_name(u.get("realName") or u.get("email")))
+              for u in await yg.users() if not u.get("deleted") and u["id"] != me]
+    people.sort(key=lambda x: x[1])
+    line = []
+    for uid, name in people:
+        line.append((f"👤 {name}", f"wp:{uid}"))
+        if len(line) == 2:
+            rows.append(line)
+            line = []
+    rows.append(line)
+    await msg.answer("Куда написать? 👥 — групповые чаты, 👤 — лично человеку.", reply_markup=kb(rows))
+
+
+@dp.callback_query(F.data.startswith("wc:") | F.data.startswith("wp:"))
+async def on_chat_pick(cb: CallbackQuery):
+    if not full(cb.from_user.id):
+        return await cb.answer("Нужен полный доступ", show_alert=True)
+    await cb.answer()
+    kind, target = cb.data.split(":", 1)
+    if kind == "wc":
+        title = next((c.get("title") for c in await yg.group_chats() if c["id"] == target), "чат")
+        drafts[cb.message.chat.id] = {"step": "chatmsg", "chat_id": target, "where": f"чат «{title}»"}
+        note = ""
+    else:
+        name = await name_of(target)
+        drafts[cb.message.chat.id] = {"step": "chatmsg", "dm": target, "where": f"лично: {name}"}
+        note = (f"\n\n<i>Личные сообщения YouGile через API недоступны, поэтому пишу в чат на двоих "
+                f"«{DM_PREFIX}{html.escape(name)}». Его создам при первом сообщении, дальше — туда же.</i>")
+    await cb.message.answer(f"Пишем в {html.escape(drafts[cb.message.chat.id]['where'])}. Напишите сообщение. "
+                            f"Отметить человека — через @: «@Константин посмотри отчёт».{note}",
+                            parse_mode=ParseMode.HTML, reply_markup=kb([[("✖️ Отмена", "nx")]]))
+
+
+async def with_mentions(text):
+    """«@Константин», «@Костя», «@Константина» → упоминание YouGile по первым 4 буквам имени."""
+    people = [(u["id"], report.first_word(mapping().get(u["id"], {}).get("name")
+                                           or report.short_name(u.get("realName") or u.get("email"))))
+              for u in await yg.users() if not u.get("deleted")]
+    found = []
+
+    def repl(m):
+        word = m.group(1).lower()
+        hits = [uid for uid, first in people if first and (first.startswith(word[:4]) or word.startswith(first))]
+        if len(hits) == 1:
+            found.append(hits[0])
+            return f"[!mention:{hits[0]}!]"
+        return m.group(0)
+
+    import re
+    return re.sub(r"@([А-Яа-яЁёA-Za-z]+)", repl, text), found
+
+
+@dp.message(F.text, lambda m: drafts.get(m.chat.id, {}).get("step") == "chatmsg")
+async def on_chat_text(msg: Message):
+    if not full(msg.from_user.id):
+        return
+    dr = drafts[msg.chat.id]
+    dr["text"], found = await with_mentions(msg.text.strip())
+    dr["step"] = "chatmsg_confirm"
+    tags = ", ".join([await name_of(u) for u in found])
+    await msg.answer(f"Отправить в {html.escape(dr['where'])}?\n\n«{html.escape(msg.text.strip())}»"
+                     + (f"\n\nОтмечу: {html.escape(tags)}" if tags else ""),
+                     parse_mode=ParseMode.HTML, reply_markup=kb([[("✅ Отправить", "wok"), ("✖️ Отмена", "nx")]]))
+
+
+@dp.callback_query(F.data == "wok")
+async def on_chat_send(cb: CallbackQuery):
+    dr = drafts.get(cb.message.chat.id)
+    if not full(cb.from_user.id) or not dr or dr.get("step") != "chatmsg_confirm":
+        return await cb.answer("Черновик не найден, начните заново")
+    await cb.answer("Отправляю…")
+    try:
+        if dr.get("dm") and not dr.get("chat_id"):
+            me = (await yg.me())["id"]
+            title = DM_PREFIX + await name_of(dr["dm"])
+            dr["chat_id"] = next((c["id"] for c in await yg.group_chats()
+                                  if not c.get("deleted") and c.get("title") == title
+                                  and {me, dr["dm"]} <= set(c.get("users") or {})), None) \
+                or await yg.create_dm_chat(me, dr["dm"], title)
+        await yg.send_message(dr["chat_id"], dr["text"])
+    except YouGileError as e:
+        log.exception("сообщение в чат")
+        return await cb.message.answer(f"Не отправилось: {html.escape(str(e)[:200])}. Нажмите «Отправить» ещё раз.")
+    drafts.pop(cb.message.chat.id, None)
+    await cb.message.edit_reply_markup(reply_markup=None)
+    await cb.message.answer(f"✅ Отправлено в {html.escape(dr['where'])}", reply_markup=kb([[(CHAT_BTN, "wch")]]))
 
 
 # --- ввод словами ---

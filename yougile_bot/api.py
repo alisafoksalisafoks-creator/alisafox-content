@@ -140,6 +140,20 @@ class YouGile:
         return await self.call("POST", f"/chats/{chat_id}/messages",
                                body={"text": plain, "textHtml": f"<p>{_html.escape(plain)}</p>", "label": ""})
 
+    async def create_dm_chat(self, me, other, title):
+        """Чат на двоих вместо личных сообщений (их API не даёт)."""
+        res = await self.call("POST", "/group-chats", body={
+            "title": title,
+            "users": {me: {"notified": True}, other: {"notified": True}},
+            "userRoleMap": {me: "admin", other: "user"},
+            "roleConfigMap": {
+                "admin": {"editProperties": True, "editAdmins": True, "editUsers": True, "sendMessages": True,
+                          "removeMessages": True},
+                "user": {"editProperties": False, "editAdmins": False, "editUsers": False, "sendMessages": True,
+                         "removeMessages": False}}})
+        self.drop_cache("gchats")
+        return (res or {}).get("id")
+
     # --- вебхуки ---
 
     async def ensure_webhooks(self, url):
