@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS subs (tg_chat INTEGER, yg_chat TEXT, PRIMARY KEY (tg_chat, yg_chat));  -- пересылка ответов
 CREATE TABLE IF NOT EXISTS bot_users (tg_id INTEGER PRIMARY KEY, name TEXT, role TEXT);  -- role: view | full
 """)
 
@@ -88,3 +89,19 @@ def set_bot_user(tg_id, name, role="view"):
 def remove_bot_user(tg_id):
     db.execute("DELETE FROM bot_users WHERE tg_id=?", (int(tg_id),))
     db.commit()
+
+
+# --- подписки на чаты: новые сообщения пересылаются в Telegram ---
+
+def subscribe(tg_chat, yg_chat):
+    db.execute("INSERT OR IGNORE INTO subs VALUES (?, ?)", (int(tg_chat), yg_chat))
+    db.commit()
+
+
+def unsubscribe(tg_chat, yg_chat):
+    db.execute("DELETE FROM subs WHERE tg_chat=? AND yg_chat=?", (int(tg_chat), yg_chat))
+    db.commit()
+
+
+def subscribers(yg_chat):
+    return [r[0] for r in db.execute("SELECT tg_chat FROM subs WHERE yg_chat=?", (yg_chat,))]

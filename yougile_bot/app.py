@@ -39,6 +39,7 @@ BACKFILL = int(os.environ.get("YG_BACKFILL", "8"))  # сколько логов 
 report.set_tz(TZ)
 yg = YouGile(os.environ.get("YOUGILE_API_KEY", ""))
 dp = Dispatcher()
+BOT: Bot | None = None  # для пересылки ответов из вебхуков
 drafts: dict[int, dict] = {}  # черновик новой задачи по чату
 pending_logs: dict[str, asyncio.Task] = {}  # отложенное чтение лога задачи после вебхука
 
@@ -900,18 +901,67 @@ async def on_chat_pick(cb: CallbackQuery):
         return await cb.answer("Нужен полный доступ", show_alert=True)
     await cb.answer()
     kind, target = cb.data.split(":", 1)
+    history = ""
     if kind == "wc":
-        title = next((c.get("title") for c in await yg.group_chats() if c["id"] == target), "чат")
-        drafts[cb.message.chat.id] = {"step": "chatmsg", "chat_id": target, "where": f"чат «{title}»"}
+        where = await chat_title(target)
+        drafts[cb.message.chat.id] = {"step": "chatmsg", "chat_id": target, "where": where}
+        history = await chat_history(target)
         note = ""
     else:
         name = await name_of(target)
-        drafts[cb.message.chat.id] = {"step": "chatmsg", "dm": target, "where": f"лично: {name}"}
+        me = (await yg.me())["id"]
+        dm = next((c["id"] for c in await yg.group_chats() if not c.get("deleted")
+                   and c.get("title") == DM_PREFIX + name and {me, target} <= set(c.get("users") or {})), None)
+        drafts[cb.message.chat.id] = {"step": "chatmsg", "dm": target, "chat_id": dm, "where": f"лично: {name}"}
+        if dm:
+            history = await chat_history(dm)
         note = (f"\n\n<i>Личные сообщения YouGile через API недоступны, поэтому пишу в чат на двоих "
                 f"«{DM_PREFIX}{html.escape(name)}». Его создам при первом сообщении, дальше — туда же.</i>")
+    if history:
+        for part in report.chunks(f"🕘 <b>Последние сообщения</b>\n{history}"):
+            await cb.message.answer(part, parse_mode=ParseMode.HTML)
     await cb.message.answer(f"Пишем в {html.escape(drafts[cb.message.chat.id]['where'])}. Напишите сообщение. "
                             f"Отметить человека — через @: «@Константин посмотри отчёт».{note}",
                             parse_mode=ParseMode.HTML, reply_markup=kb([[("✖️ Отмена", "nx")]]))
+
+
+async def chat_title(chat_id):
+    """Название чата: групповой — по названию, чат задачи — по названию задачи."""
+    for c in await yg.group_chats():
+        if c["id"] == chat_id:
+            return f"чат «{c.get('title') or 'без названия'}»"
+    for t in await yg.tasks():
+        if t["id"] == chat_id:
+            return f"задача «{report.clean(t.get('title'), 60)}»"
+    return "чат"
+
+
+async def readable(text):
+    """Текст сообщения YouGile для Telegram: без HTML, упоминания — @Имя."""
+    import re
+    text = text or ""
+    for uid in set(re.findall(r"\[!mention:([\w-]+)!\]", text)):
+        text = text.replace(f"[!mention:{uid}!]", "@" + await name_of(uid))
+    return report.clean(text, 600)
+
+
+async def chat_history(chat_id, n=10):
+    """Последние сообщения чата за неделю: «Имя, 12:30: текст»."""
+    since = int((datetime.now(TZ) - timedelta(days=7)).timestamp() * 1000)
+    try:
+        msgs = [m for m in await yg.messages(chat_id, since) if not m.get("deleted") and m.get("id")]
+    except YouGileError:
+        log.exception("история чата")
+        return "<i>Историю чата получить не удалось.</i>"
+    msgs = sorted(msgs, key=lambda m: m["id"])[-n:]
+    if not msgs:
+        return "<i>За неделю сообщений нет.</i>"
+    lines = []
+    for m in msgs:
+        when = datetime.fromtimestamp(m["id"] / 1000, TZ).strftime("%d.%m %H:%M")
+        lines.append(f"<b>{html.escape(await name_of(m.get('fromUserId')) if m.get('fromUserId') else 'Система')}</b>, "
+                     f"{when}: {html.escape(await readable(m.get('text')))}")
+    return "\n".join(lines)
 
 
 async def with_mentions(text):
@@ -965,8 +1015,38 @@ async def on_chat_send(cb: CallbackQuery):
         log.exception("сообщение в чат")
         return await cb.message.answer(f"Не отправилось: {html.escape(str(e)[:200])}. Нажмите «Отправить» ещё раз.")
     drafts.pop(cb.message.chat.id, None)
+    store.subscribe(cb.message.chat.id, dr["chat_id"])
     await cb.message.edit_reply_markup(reply_markup=None)
-    await cb.message.answer(f"✅ Отправлено в {html.escape(dr['where'])}", reply_markup=kb([[(CHAT_BTN, "wch")]]))
+    await cb.message.answer(f"✅ Отправлено в {html.escape(dr['where'])}. Ответы из этого чата пришлю сюда.",
+                            reply_markup=kb([[("🔕 Не присылать ответы", f"un:{dr['chat_id']}"), (CHAT_BTN, "wch")]]))
+
+
+@dp.callback_query(F.data.startswith("un:"))
+async def on_unsub(cb: CallbackQuery):
+    store.unsubscribe(cb.message.chat.id, cb.data[3:])
+    await cb.answer("Больше не присылаю сообщения из этого чата")
+    await cb.message.edit_reply_markup(reply_markup=None)
+
+
+async def forward_reply(chat_id, msg_id, from_user, text):
+    """Новое сообщение в чате, куда владелец писал через бота, — в Telegram с кнопкой «Ответить»."""
+    subs = store.subscribers(chat_id)
+    if not subs or not BOT:
+        return
+    try:
+        if from_user == (await yg.me())["id"]:
+            return  # своё же сообщение (в том числе отправленное ботом) не пересылаем
+        body = (f"💬 <b>{html.escape(await chat_title(chat_id))}</b>\n"
+                f"<b>{html.escape(await name_of(from_user))}</b>: {html.escape(await readable(text))}")
+    except YouGileError:
+        log.exception("пересылка")
+        return
+    for tg in subs:
+        try:
+            await BOT.send_message(tg, body, parse_mode=ParseMode.HTML, reply_markup=kb([
+                [("↩️ Ответить", f"wc:{chat_id}"), ("🔕 Не присылать", f"un:{chat_id}")]]))
+        except Exception:
+            log.exception("пересылка в %s", tg)
 
 
 # --- ввод словами ---
@@ -1130,10 +1210,12 @@ async def on_input_ok(cb: CallbackQuery):
                 done.append(f"✅ Задача «{a['title']}» поставлена" + (", описание в чате задачи" if a["description"] else ""))
             elif a["type"] == "group_chat_message":
                 await yg.send_message(a["chat_id"], a["text"], a["mention_ids"])
-                done.append("✅ Сообщение в чат отправлено")
+                store.subscribe(cb.message.chat.id, a["chat_id"])
+                done.append("✅ Сообщение в чат отправлено, ответы пришлю сюда")
             else:
                 await yg.send_message(a["task_id"], a["text"], a["mention_ids"])
-                done.append("✅ Сообщение в задачу отправлено")
+                store.subscribe(cb.message.chat.id, a["task_id"])
+                done.append("✅ Сообщение в задачу отправлено, ответы пришлю сюда")
             a["done"] = True  # повторное «Выполнить» после ошибки не продублирует сделанное
         except (YouGileError, ValueError) as e:
             log.exception("ввод: выполнение")
@@ -1187,6 +1269,7 @@ async def on_webhook(request: web.Request):
             task_id = chat_id if chat_id in {t["id"] for t in await yg.tasks()} else None
             store.add(f"msg:{chat_id}:{p['id']}", p["id"], p.get("fromUserId"), "message",
                       task_id=task_id, chat_id=chat_id, text=p.get("text"))
+            asyncio.create_task(forward_reply(chat_id, p["id"], p.get("fromUserId"), p.get("text")))
     elif event.startswith("task-") and p.get("id"):
         if p["id"] not in pending_logs:
             pending_logs[p["id"]] = asyncio.create_task(read_log_later(p["id"]))
@@ -1214,7 +1297,8 @@ async def main():
         await run_webhooks()
     else:
         log.warning("YG_WEBHOOK_URL не задан: сообщения и переносы видны только через историю задач")
-    bot = Bot(token)
+    global BOT
+    bot = BOT = Bot(token)
     asyncio.create_task(scheduler(bot))
     try:
         await dp.start_polling(bot)
