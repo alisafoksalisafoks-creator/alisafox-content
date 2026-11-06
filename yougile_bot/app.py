@@ -741,17 +741,43 @@ async def on_new_for(cb: CallbackQuery):
     uid = cb.data[3:]
     drafts[cb.message.chat.id] = {"uid": uid, "step": "text"}
     await cb.message.answer(f"Задача для: <b>{html.escape(await name_of(uid))}</b>.\n"
-                            "Напишите задачу одним сообщением: первая строка — название, дальше — описание.",
+                            "Напишите <b>название</b> задачи.",
                             parse_mode=ParseMode.HTML, reply_markup=kb([[("✖️ Отмена", "nx")]]))
 
 
 @dp.message(F.text, lambda m: drafts.get(m.chat.id, {}).get("step") == "text")
 async def on_task_text(msg: Message):
+    """Шаг 1: название. Всё сообщение — название задачи."""
     if not full(msg.from_user.id):
         return
-    title, _, desc = msg.text.strip().partition("\n")
     dr = drafts[msg.chat.id]
-    dr.update(title=title.strip()[:250], desc=desc.strip(), step="deadline")
+    dr.update(title=" ".join(msg.text.split())[:250], step="desc")
+    await msg.answer("Теперь <b>описание</b>: что сделать, ссылки, детали. Оно уйдёт первым сообщением "
+                     "в чат задачи с отметкой исполнителя.", parse_mode=ParseMode.HTML,
+                     reply_markup=kb([[("Без описания", "nd")], [("✖️ Отмена", "nx")]]))
+
+
+@dp.message(F.text, lambda m: drafts.get(m.chat.id, {}).get("step") == "desc")
+async def on_task_desc(msg: Message):
+    """Шаг 2: описание — пойдёт в чат задачи."""
+    if not full(msg.from_user.id):
+        return
+    drafts[msg.chat.id]["desc"] = msg.text.strip()
+    await ask_deadline(msg)
+
+
+@dp.callback_query(F.data == "nd")
+async def on_no_desc(cb: CallbackQuery):
+    dr = drafts.get(cb.message.chat.id)
+    if not full(cb.from_user.id) or not dr or dr.get("step") != "desc":
+        return await cb.answer("Черновик не найден, начните заново")
+    await cb.answer()
+    dr["desc"] = ""
+    await ask_deadline(cb.message)
+
+
+async def ask_deadline(msg: Message):
+    drafts[msg.chat.id]["step"] = "deadline"
     t = today()
     friday = t + timedelta(days=(4 - t.weekday()) % 7 or 7)
     await msg.answer("Срок?", reply_markup=kb([
@@ -784,7 +810,7 @@ async def on_deadline(cb: CallbackQuery):
     place = f"{boards.get(c['boardId'], {}).get('title', 'доска')} › {c['title']}" if c else "без доски"
     dl = date.fromisoformat(dr["deadline"]).strftime("%d.%m.%Y") if dr["deadline"] else "без срока"
     text = (f"Проверьте:\n\n<b>{html.escape(dr['title'])}</b>\n"
-            + (f"{html.escape(report.clean(dr['desc'], 600))}\n" if dr["desc"] else "")
+            + (f"\n💬 В чат задачи: {html.escape(report.clean(dr['desc'], 600))}\n" if dr["desc"] else "")
             + f"\nИсполнитель: {html.escape(await name_of(dr['uid']))}\nКуда: {html.escape(place)}\nСрок: {dl}")
     await cb.message.answer(text, parse_mode=ParseMode.HTML,
                             reply_markup=kb([[("✅ Поставить", "nok"), ("✖️ Отмена", "nx")]]))
@@ -801,11 +827,17 @@ async def on_confirm(cb: CallbackQuery):
     if dr["deadline"]:
         dl_ms = report.day_window(date.fromisoformat(dr["deadline"]), TZ)[0] + 18 * 3600_000
     try:
-        await yg.create_task(dr["title"], dr["desc"], mapping().get(dr["uid"], {}).get("column"),
-                             [dr["uid"]], dl_ms, dr["key"])
+        if not dr.get("task_id"):
+            res = await yg.create_task(dr["title"], "", mapping().get(dr["uid"], {}).get("column"),
+                                       [dr["uid"]], dl_ms, dr["key"])
+            dr["task_id"] = (res or {}).get("id")
+        if dr["desc"] and dr.get("task_id") and not dr.get("desc_sent"):
+            await yg.send_message(dr["task_id"], dr["desc"], [dr["uid"]])
+            dr["desc_sent"] = True
     except YouGileError as e:
         log.exception("создание задачи")
-        return await cb.message.answer(f"Не получилось поставить задачу: {html.escape(str(e)[:200])}. "
+        what = "отправить описание в чат задачи" if dr.get("task_id") else "поставить задачу"
+        return await cb.message.answer(f"Не получилось {what}: {html.escape(str(e)[:200])}. "
                                        "Нажмите «Поставить» ещё раз — дубля не будет.")
     drafts.pop(cb.message.chat.id, None)
     await cb.message.edit_reply_markup(reply_markup=None)
@@ -973,8 +1005,12 @@ async def on_input_ok(cb: CallbackQuery):
                 col = mapping().get((a["assignee_ids"] or [""])[0], {}).get("column")
                 dl = (report.day_window(date.fromisoformat(a["deadline"]), TZ)[0] + 18 * 3600_000
                       if a["deadline"] else None)
-                await yg.create_task(a["title"], a["description"], col, a["assignee_ids"], dl, f"{dr['key']}-{i}")
-                done.append(f"✅ Задача «{a['title']}» поставлена")
+                if not a.get("task_id"):
+                    res = await yg.create_task(a["title"], "", col, a["assignee_ids"], dl, f"{dr['key']}-{i}")
+                    a["task_id"] = (res or {}).get("id")
+                if a["description"] and a.get("task_id"):
+                    await yg.send_message(a["task_id"], a["description"], a["assignee_ids"])
+                done.append(f"✅ Задача «{a['title']}» поставлена" + (", описание в чате задачи" if a["description"] else ""))
             elif a["type"] == "group_chat_message":
                 await yg.send_message(a["chat_id"], a["text"], a["mention_ids"])
                 done.append("✅ Сообщение в чат отправлено")
