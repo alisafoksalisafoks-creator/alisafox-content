@@ -1,10 +1,10 @@
 """Расшифровка голосовых для «Ввода»: faster-whisper прямо на сервере, без внешних ключей.
-Модель скачивается при первом голосовом (~460 МБ для small). Размер — YG_WHISPER_MODEL."""
+Модель скачивается при первом голосовом (~150 МБ для base; small точнее, но берёт ~500 МБ памяти — на сервере с 2 ГБ рискованно). Размер — YG_WHISPER_MODEL."""
 import asyncio
 import io
 import os
 
-MODEL = os.environ.get("YG_WHISPER_MODEL", "small")
+MODEL = os.environ.get("YG_WHISPER_MODEL", "base")
 _model = None
 
 
