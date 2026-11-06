@@ -43,13 +43,16 @@ BOT: Bot | None = None  # для пересылки ответов из вебх
 drafts: dict[int, dict] = {}  # черновик новой задачи по чату
 pending_logs: dict[str, asyncio.Task] = {}  # отложенное чтение лога задачи после вебхука
 
-DATE_BTN = "📅 Выберите дату"
+DATE_BTN = "📅 По дате"
 PERSONAL_BTN = "👤 Личный"
 INPUT_BTN = "✍️ Ввод"
-COMPANY_BTN = "🏢 Итоги дня компании"
-ACCESS_BTN = "👥 Добавить пользователя"
+COMPANY_BTN = "🏢 Итоги дня"
+ACCESS_BTN = "👥 Доступ"
 OVERDUE_BTN = "⏰ Просрочки"
-CHAT_BTN = "💬 Написать в чат"
+CHAT_BTN = "💬 Чаты"
+# старые подписи кнопок — у кого ещё висит прежняя клавиатура
+OLD_BTNS = {"📅 Выберите дату": "📅 По дате", "🏢 Итоги дня компании": "🏢 Итоги дня",
+            "👥 Добавить пользователя": "👥 Доступ", "💬 Написать в чат": "💬 Чаты"}
 WEEK_BTN = "📈 Неделя"
 MORNING = os.environ.get("YG_MORNING", "09:00")  # автоотчёт: итоги вчера и просрочки
 IDLE_CHECK = os.environ.get("YG_IDLE_CHECK", "11:00")  # сигнал «нет активности»
@@ -96,7 +99,8 @@ def kb(rows, home=True):
 def start_kb(uid):
     return kb([[(DATE_BTN, "pick"), (PERSONAL_BTN, "me")],
                [(INPUT_BTN, "in"), (COMPANY_BTN, f"co:{today()}")],
-               [(CHAT_BTN, "wch"), (OVERDUE_BTN, "od"), (WEEK_BTN, "wkm")],
+               [(CHAT_BTN, "wch"), (OVERDUE_BTN, "od")],
+               [(WEEK_BTN, "wkm")],
                [(ACCESS_BTN, "acc:list")] if uid == OWNER else []], home=False)
 
 
@@ -176,7 +180,7 @@ async def start(msg: Message):
             return await msg.answer(f"Бот ещё не настроен. Ваш Telegram ID: {uid}")
         access_requests[uid] = who(msg.from_user)
         await msg.bot.send_message(OWNER, f"Просит доступ к боту YouGile: {html.escape(access_requests[uid])}, ID {uid}",
-                                   reply_markup=kb([[("👁 Только отчёты", f"acc:view:{uid}"),
+                                   reply_markup=kb([[("👁 Отчёты", f"acc:view:{uid}"),
                                                      ("✅ Полный", f"acc:full:{uid}")],
                                                     [("❌ Отказать", f"acc:no:{uid}")]]))
         return await msg.answer("Запрос отправлен владельцу. Как только он откроет доступ, я напишу.")
@@ -212,7 +216,7 @@ async def on_week_menu(cb: CallbackQuery):
     await week_btn(cb.message, cb.from_user.id)
 
 
-@dp.message(F.text == DATE_BTN)
+@dp.message(F.text.in_({DATE_BTN, "📅 Выберите дату"}))
 async def date_btn(msg: Message):
     if allowed(msg.from_user.id):
         await msg.answer("За какой день показать?", reply_markup=calendar_kb("d", today()))
@@ -231,7 +235,7 @@ async def personal_btn(msg: Message):
 ROLE = {"view": "👁 отчёты", "full": "✅ полный"}
 
 
-@dp.message(F.text == ACCESS_BTN)
+@dp.message(F.text.in_({ACCESS_BTN, "👥 Добавить пользователя"}))
 async def access_btn(msg: Message):
     if msg.from_user.id == OWNER:
         await access_list(msg)
@@ -244,7 +248,7 @@ async def access_list(msg: Message):
             "(от имени владельца ключа).\n\n"
             + ("\n".join(f"• {html.escape(n)} — {ROLE.get(r, r)}, ID {i}" for i, (n, r) in u.items())
                or "Других пользователей пока нет."))
-    rows = [[(f"{'👁→✅' if r == 'view' else '✅→👁'} {n[:20]}", f"acc:{'full' if r == 'view' else 'view'}:{i}"),
+    rows = [[(f"{'👁→✅' if r == 'view' else '✅→👁'} {n[:12]}", f"acc:{'full' if r == 'view' else 'view'}:{i}"),
              ("🗑 Убрать", f"acc:del:{i}")] for i, (n, r) in u.items()]
     rows.append([("➕ Добавить по ID", "acc:add")])
     await msg.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb(rows))
@@ -365,12 +369,12 @@ async def day_screen(d: date):
     for uid, name in await employees():
         n = report.count(report.collect(uid, events, tasks, start, end))
         line.append((f"{name} · {n}" if n else name, f"e:{d}:{uid}"))
-        if len(line) == 2:
+        if len(line) == 1:
             rows.append(line)
             line = []
     rows.append(line)
     rows.append([(COMPANY_BTN, f"co:{d}")])
-    rows.append([("◀️ Другая дата", "pick")])
+    rows.append([("📅 Другой день", "pick")])
     note = "Цифра — сколько действий нашёл бот." + (
         " День раньше запуска бота: по клику доберу историю задач, это займёт до минуты."
         if start < collected_from() else "")
@@ -388,7 +392,7 @@ async def on_employee(cb: CallbackQuery):
     await cb.message.answer(f"<b>{html.escape(await name_of(uid))}</b> · {report.day_title(d)}",
                             parse_mode=ParseMode.HTML, reply_markup=kb([
                                 [("📊 План|Факт", f"pf:{d}:{uid}"), (INPUT_BTN, f"in:{uid}")],
-                                [("◀️ К сотрудникам", f"d:{d}"), ("➕ Задача", f"nu:{uid}")]]))
+                                [("👥 Сотрудники", f"d:{d}"), ("➕ Задача", f"nu:{uid}")]]))
 
 
 @dp.callback_query(F.data.startswith("pf:") | F.data.startswith("pfd:"))
@@ -408,7 +412,7 @@ async def on_plan_fact(cb: CallbackQuery):
         text = f"YouGile не ответил: {html.escape(str(e)[:200])}"
     finally:
         await wait.delete()
-    nav = [("◀️ К сотрудникам", f"d:{d}"), ("➕ Задача", f"nu:{uid}")]
+    nav = [("👥 Сотрудники", f"d:{d}"), ("➕ Задача", f"nu:{uid}")]
     more = [("📋 Подробно", f"pfd:{d}:{uid}")] if mode == "pf" else [("📝 Коротко", f"pf:{d}:{uid}")]
     parts = report.chunks(text)
     for i, part in enumerate(parts):
@@ -493,7 +497,7 @@ async def backfill(uid, tasks, columns, start, end):
 
 # --- итоги дня компании ---
 
-@dp.message(F.text == COMPANY_BTN)
+@dp.message(F.text.in_({COMPANY_BTN, "🏢 Итоги дня компании"}))
 async def company_btn(msg: Message):
     if allowed(msg.from_user.id):
         await send_company(msg, today())
@@ -522,7 +526,7 @@ async def send_company(msg: Message, d: date, detail=False):
     for i, part in enumerate(parts):
         last = i == len(parts) - 1
         await msg.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([
-            [switch], [("👥 По сотрудникам", f"d:{d}"), ("◀️ Другая дата", "pick")]]) if last else None)
+            [switch], [("👥 Сотрудники", f"d:{d}"), ("📅 Дата", "pick")]]) if last else None)
 
 
 @dp.callback_query(F.data.startswith("cod:"))
@@ -699,8 +703,8 @@ async def scheduler(bot: Bot):
 async def personal(msg: Message):
     await msg.answer("Личный раздел.", reply_markup=kb([
         [("➕ Поставить задачу", "nt")],
-        [("📌 Поставлены мной, открытые", "mine"), ("🙋 Мои задачи", "my")],
-        [("📝 Мои действия сегодня", "myday")],
+        [("📌 Поставил я", "mine"), ("🙋 Мои задачи", "my")],
+        [("📝 Мой день", "myday")],
     ]))
 
 
@@ -772,7 +776,7 @@ async def on_new_task(cb: CallbackQuery):
     rows, line = [], []
     for uid, name in await employees():
         line.append((name, f"nu:{uid}"))
-        if len(line) == 2:
+        if len(line) == 1:
             rows.append(line)
             line = []
     rows.append(line)
@@ -828,8 +832,8 @@ async def ask_deadline(msg: Message):
     friday = t + timedelta(days=(4 - t.weekday()) % 7 or 7)
     await msg.answer("Срок?", reply_markup=kb([
         [("Сегодня", f"dd:{t}"), ("Завтра", f"dd:{t + timedelta(days=1)}")],
-        [(f"Пятница {friday:%d.%m}", f"dd:{friday}"), ("Через неделю", f"dd:{t + timedelta(days=7)}")],
-        [("🗓 Другая дата", "ddcal"), ("Без срока", "dd:none")],
+        [(f"Пт {friday:%d.%m}", f"dd:{friday}"), ("+7 дней", f"dd:{t + timedelta(days=7)}")],
+        [("🗓 Дата", "ddcal"), ("Без срока", "dd:none")],
         [("✖️ Отмена", "nx")],
     ]))
 
@@ -903,7 +907,7 @@ async def on_cancel(cb: CallbackQuery):
 DM_PREFIX = "Личное: "
 
 
-@dp.message(F.text == CHAT_BTN)
+@dp.message(F.text.in_({CHAT_BTN, "💬 Написать в чат"}))
 async def chat_btn(msg: Message):
     if not full(msg.from_user.id):
         return await msg.answer("Писать в чаты можно с полным доступом. Попросите владельца.")
@@ -930,7 +934,7 @@ async def chat_menu(msg: Message):
     line = []
     for uid, name in people:
         line.append((f"👤 {name}", f"wp:{uid}"))
-        if len(line) == 2:
+        if len(line) == 1:
             rows.append(line)
             line = []
     rows.append(line)
@@ -1060,7 +1064,7 @@ async def on_chat_send(cb: CallbackQuery):
     store.subscribe(cb.message.chat.id, dr["chat_id"])
     await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer(f"✅ Отправлено в {html.escape(dr['where'])}. Ответы из этого чата пришлю сюда.",
-                            reply_markup=kb([[("🔕 Не присылать ответы", f"un:{dr['chat_id']}"), (CHAT_BTN, "wch")]]))
+                            reply_markup=kb([[("🔕 Без ответов", f"un:{dr['chat_id']}"), (CHAT_BTN, "wch")]]))
 
 
 @dp.callback_query(F.data.startswith("un:"))
@@ -1086,7 +1090,7 @@ async def forward_reply(chat_id, msg_id, from_user, text):
     for tg in subs:
         try:
             await BOT.send_message(tg, body, parse_mode=ParseMode.HTML, reply_markup=kb([
-                [("↩️ Ответить", f"wc:{chat_id}"), ("🔕 Не присылать", f"un:{chat_id}")]]))
+                [("↩️ Ответить", f"wc:{chat_id}"), ("🔕 Без ответов", f"un:{chat_id}")]]))
         except Exception:
             log.exception("пересылка в %s", tg)
 
