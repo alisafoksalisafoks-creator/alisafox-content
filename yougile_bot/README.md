@@ -38,7 +38,9 @@ Telegram-бот для владельца: кто чем занимался в Y
    ```
    git clone -b claude/project-thread-nl3oqt git@github.com:alisafoksalisafoks-creator/alisafox-content.git /opt/yougile-bot ; bash /opt/yougile-bot/yougile_bot/deploy/install.sh
    ```
-   Скрипт создаст `/opt/yougile-bot/.env`, сам впишет адрес для событий YouGile и ключ Claude от бота «Промт инженер», и остановится.
+   Скрипт создаст `/opt/yougile-bot/.env`, сам впишет адрес для событий YouGile (и ключ Claude, если он есть у бота «Промт инженер»), и остановится.
+   Ключ Claude для «Ввода» и конспектов: console.anthropic.com → Billing (пополнить) → API Keys → Create Key, затем на сервере:
+   `read -p "Ключ: " T && sed -i "s|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=$T|" /opt/yougile-bot/.env`
 3. Ключ YouGile (логин и пароль администратора «ИП Попова» вводятся только на сервере, ключ сразу пишется в `.env`):
    ```
    /opt/yougile-bot/.venv/bin/python /opt/yougile-bot/yougile_bot/deploy/make_key.py
