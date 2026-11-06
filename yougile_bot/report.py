@@ -165,6 +165,37 @@ def render(name, d, groups, tasks_by_id, where, column_title, chat_title, partia
     return "\n\n".join(out)
 
 
+def digest(groups, tasks_by_id, column_title, chat_title, plan_items=()):
+    """Факты дня простым текстом для конспекта: задачи с действиями и выдержки из переписки."""
+    out = []
+    if plan_items:
+        out.append("План (сроки на день): " + "; ".join(
+            f"{clean(t.get('title'), 70)} — {'выполнена' if s == 'done' else 'не выполнена'}"
+            + (" (хвост с прошлых дней)" if s == "late" else "") for t, s in plan_items))
+    order = sorted(groups.values(), key=lambda g: max(i[0] for i in g["items"]), reverse=True)
+    for g in order:
+        t = tasks_by_id.get(g.get("task_id") or "")
+        acts, msgs = [], []
+        for ts, kind, extra, text in sorted(g["items"], key=lambda i: i[0]):
+            if kind == "message":
+                if clean(text):
+                    msgs.append(clean(text, 160))
+            elif kind == "move":
+                acts.append(f"перенесена в «{column_title(extra.get('to'))}»")
+            else:
+                acts.append(LABELS.get(kind, kind).split(" ", 1)[-1])
+        n_msg = sum(1 for i in g["items"] if i[1] == "message")
+        if g.get("chat_id") and not g.get("task_id"):
+            head = f"Групповой чат «{chat_title(g['chat_id'])}»"
+        else:
+            head = f"Задача «{clean(t.get('title'), 90)}»" if t else "Удалённая задача"
+        line = head + (": " + ", ".join(dict.fromkeys(acts)) if acts else "")
+        if n_msg:
+            line += f"; сообщений {n_msg}" + (": " + " | ".join(msgs[-4:]) if msgs else "")
+        out.append(line)
+    return "\n".join(f"- {x}" for x in out)
+
+
 def company_line(name, groups, tasks_by_id):
     """Одна строка итогов: «Имя: ✅2 ➡️3 ➕1 💬15 — задача1; задача2»."""
     kinds = {}

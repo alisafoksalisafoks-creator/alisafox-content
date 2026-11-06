@@ -349,30 +349,35 @@ async def on_employee(cb: CallbackQuery):
                                 [("◀️ К сотрудникам", f"d:{d}"), ("➕ Задача", f"nu:{uid}")]]))
 
 
-@dp.callback_query(F.data.startswith("pf:"))
+@dp.callback_query(F.data.startswith("pf:") | F.data.startswith("pfd:"))
 async def on_plan_fact(cb: CallbackQuery):
-    """Полная сводка за день: план, действия на досках, чаты задач, групповые чаты."""
+    """План|Факт: короткий конспект, по кнопке «Подробно» — полный разбор."""
     if not allowed(cb.from_user.id):
         return await cb.answer("Нет доступа")
-    _, day, uid = cb.data.split(":", 2)
+    mode, day, uid = cb.data.split(":", 2)
     d = date.fromisoformat(day)
     await cb.answer("Собираю…")
-    wait = await cb.message.answer("⏳ Собираю сводку…")
+    wait = await cb.message.answer("⏳ Собираю…")
     try:
-        text = await employee_report(uid, d)
+        r = await employee_data(uid, d)
+        text = r["detail"] if mode == "pfd" else await employee_brief(r, uid, d)
     except YouGileError as e:
         log.exception("YouGile")
         text = f"YouGile не ответил: {html.escape(str(e)[:200])}"
     finally:
         await wait.delete()
+    nav = [("◀️ К сотрудникам", f"d:{d}"), ("➕ Задача", f"nu:{uid}")]
+    more = [("📋 Подробно", f"pfd:{d}:{uid}")] if mode == "pf" else [("📝 Коротко", f"pf:{d}:{uid}")]
     parts = report.chunks(text)
     for i, part in enumerate(parts):
         last = i == len(parts) - 1
-        await cb.message.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([
-            [("◀️ К сотрудникам", f"d:{d}"), ("➕ Задача", f"nu:{uid}")]]) if last else None)
+        await cb.message.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([more, nav]) if last else None)
 
 
-async def employee_report(uid, d: date):
+briefs: dict[tuple, str] = {}  # конспекты: (вид, день, кто, число действий) → текст; новые действия — новый конспект
+
+
+async def employee_data(uid, d: date):
     start, end = report.day_window(d, TZ)
     tasks, by_id, columns, where, column_title = await lookups()
     partial = start < collected_from()
@@ -380,8 +385,39 @@ async def employee_report(uid, d: date):
         await backfill(uid, tasks, columns, start, end)
     groups = report.collect(uid, store.between(start, end), tasks, start, end)
     titles = {c["id"]: c.get("title") or "групповой" for c in await yg.group_chats()}
-    return report.render(await name_of(uid), d, groups, by_id, where, column_title,
-                         lambda c: titles.get(c, "групповой"), partial, report.plan(uid, tasks, start, end))
+    plan = report.plan(uid, tasks, start, end)
+    name = await name_of(uid)
+    chat = lambda c: titles.get(c, "групповой")  # noqa: E731
+    return {"name": name, "partial": partial, "groups": groups, "plan": plan,
+            "detail": report.render(name, d, groups, by_id, where, column_title, chat, partial, plan),
+            "facts": report.digest(groups, by_id, column_title, chat, plan)}
+
+
+async def employee_report(uid, d: date):
+    return (await employee_data(uid, d))["detail"]
+
+
+async def employee_brief(r, uid, d: date):
+    """Конспект за день от Claude. Без ключа или при ошибке — подробный разбор."""
+    n = report.count(r["groups"])
+    head = f"📝 <b>{html.escape(r['name'])}</b> · {report.day_title(d)}"
+    if not n and not r["plan"]:
+        return head + "\n\nДействий в YouGile за этот день нет."
+    done = sum(1 for _, s in r["plan"] if s == "done")
+    stat = f"Действий: {n}" + (f" · план {done} из {len(r['plan'])}" if r["plan"] else "")
+    if not ai.client:
+        return r["detail"]
+    key = ("e", d, uid, n, done)
+    if len(briefs) > 500:
+        briefs.clear()
+    if key not in briefs:
+        try:
+            briefs[key] = await ai.brief_employee(r["name"], report.day_title(d), r["facts"], r["partial"])
+        except Exception:
+            log.exception("конспект")
+            return r["detail"]
+    note = "\n\n<i>День раньше запуска бота — данные неполные.</i>" if r["partial"] else ""
+    return f"{head}\n{stat}\n\n{html.escape(briefs[key])}{note}"
 
 
 async def backfill(uid, tasks, columns, start, end):
@@ -429,16 +465,30 @@ async def on_company(cb: CallbackQuery):
     await send_company(cb.message, date.fromisoformat(cb.data[3:]))
 
 
-async def send_company(msg: Message, d: date):
-    """Все пользователи компании, без исключений: строка на человека."""
+async def send_company(msg: Message, d: date, detail=False):
+    """Итоги компании: конспект, по кнопке — подробные строки."""
+    wait = await msg.answer("⏳ Собираю…")
     try:
-        text = await company_text(d)
+        text = await company_text(d, detail)
     except YouGileError as e:
         log.exception("YouGile")
         return await msg.answer(f"YouGile не ответил: {html.escape(str(e)[:200])}")
-    for part in report.chunks(text):
-        await msg.answer(part, parse_mode=ParseMode.HTML,
-                         reply_markup=kb([[("👥 По сотрудникам", f"d:{d}"), ("◀️ Другая дата", "pick")]]))
+    finally:
+        await wait.delete()
+    switch = ("📝 Коротко", f"co:{d}") if detail else ("📋 Подробно", f"cod:{d}")
+    parts = report.chunks(text)
+    for i, part in enumerate(parts):
+        last = i == len(parts) - 1
+        await msg.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([
+            [switch], [("👥 По сотрудникам", f"d:{d}"), ("◀️ Другая дата", "pick")]]) if last else None)
+
+
+@dp.callback_query(F.data.startswith("cod:"))
+async def on_company_detail(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        return await cb.answer("Нет доступа")
+    await cb.answer("Собираю…")
+    await send_company(cb.message, date.fromisoformat(cb.data[4:]), detail=True)
 
 
 # --- просрочки и неделя ---
@@ -513,9 +563,11 @@ async def recipients():
     return [OWNER] + [i for i, (_, r) in store.bot_users().items() if r == "full"]
 
 
-async def company_text(d: date):
+async def company_text(d: date, detail=False):
     start, end = report.day_window(d, TZ)
-    tasks, by_id, *_ = await lookups()
+    tasks, by_id, columns, where, column_title = await lookups()
+    titles = {c["id"]: c.get("title") or "групповой" for c in await yg.group_chats()}
+    chat = lambda c: titles.get(c, "групповой")  # noqa: E731
     events = store.between(start, end)
     rows, idle = [], []
     for u in await yg.users():
@@ -525,11 +577,37 @@ async def company_text(d: date):
         groups = report.collect(u["id"], events, tasks, start, end)
         n = report.count(groups)
         if n:
-            rows.append((n, report.company_line(name, groups, by_id)))
+            rows.append((n, name, groups))
         else:
             idle.append(name)
-    return report.company(d, [line for _, line in sorted(rows, reverse=True)], sorted(idle),
-                          start < collected_from())
+    rows.sort(key=lambda r: -r[0])
+    partial = start < collected_from()
+    idle.sort()
+    if detail or not ai.client or not rows:
+        return report.company(d, [report.company_line(n, g, by_id) for _, n, g in rows], idle, partial)
+    total = sum(r[0] for r in rows)
+    key = ("c", d, total)
+    if key not in briefs:
+        people = [(name, report.digest(g, by_id, column_title, chat)) for _, name, g in rows]
+        try:
+            briefs[key] = await ai.brief_company(report.day_title(d), people, idle, partial)
+        except Exception:
+            log.exception("конспект компании")
+            return report.company(d, [report.company_line(n, g, by_id) for _, n, g in rows], idle, partial)
+    lines = []
+    for line in briefs[key].splitlines():
+        line = line.strip().lstrip("•-– ").strip()
+        if not line:
+            continue
+        who_, sep, rest = line.partition(" — ")
+        lines.append(f"• <b>{html.escape(who_)}</b> — {html.escape(rest)}" if sep and len(who_) < 40
+                     else html.escape(line))
+    text = [f"🏢 <b>Итоги дня компании</b> · {report.day_title(d)}", f"Работали в YouGile: {len(rows)}", ""] + lines
+    if idle:
+        text += ["", "Без действий: " + html.escape(", ".join(idle))]
+    if partial:
+        text.append("<i>День раньше запуска бота — данные неполные.</i>")
+    return "\n".join(text)
 
 
 async def broadcast(bot: Bot, text):
