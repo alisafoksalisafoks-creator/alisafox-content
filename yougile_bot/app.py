@@ -81,9 +81,23 @@ def who(user):
     return user.full_name + (f" (@{user.username})" if user.username else "")
 
 
-def kb(rows):
+HOME = ("🏠 Домой", "home")
+
+
+def kb(rows, home=True):
+    """Кнопки под сообщением. Внизу всегда «🏠 Домой», кроме самого стартового меню."""
+    rows = [r for r in rows if r]
+    if home and not any(d == "home" for r in rows for _, d in r):
+        rows.append([HOME])
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, callback_data=d) for t, d in r]
-                                                 for r in rows if r])
+                                                 for r in rows])
+
+
+def start_kb(uid):
+    return kb([[(DATE_BTN, "pick"), (PERSONAL_BTN, "me")],
+               [(INPUT_BTN, "in"), (COMPANY_BTN, f"co:{today()}")],
+               [(CHAT_BTN, "wch"), (OVERDUE_BTN, "od"), (WEEK_BTN, "wkm")],
+               [(ACCESS_BTN, "acc:list")] if uid == OWNER else []], home=False)
 
 
 def collected_from():
@@ -168,10 +182,34 @@ async def start(msg: Message):
         return await msg.answer("Запрос отправлен владельцу. Как только он откроет доступ, я напишу.")
     await msg.answer("YouGile AlisaFox. Отчёт по сотрудникам — «Выберите дату». Свои задачи — «Личный». "
                      "Любое действие словами («поставь Веронике задачу до пятницы…») — «Ввод».", reply_markup=menu(uid))
-    await msg.answer("Что открыть?", reply_markup=kb([[(DATE_BTN, "pick"), (PERSONAL_BTN, "me")],
-                                                       [(INPUT_BTN, "in"), (COMPANY_BTN, f"co:{today()}")],
-                                                       [(CHAT_BTN, "wch")],
-                                                       [(ACCESS_BTN, "acc:list")] if uid == OWNER else []]))
+    await msg.answer("Что открыть?", reply_markup=start_kb(uid))
+
+
+@dp.callback_query(F.data == "home")
+async def on_home(cb: CallbackQuery):
+    """Домой: сбросить начатое и показать стартовое меню."""
+    if not allowed(cb.from_user.id):
+        return await cb.answer("Нет доступа")
+    drafts.pop(cb.message.chat.id, None)
+    await cb.answer()
+    await cb.message.answer("🏠 Что открыть?", reply_markup=start_kb(cb.from_user.id))
+
+
+@dp.callback_query(F.data == "od")
+async def on_overdue(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        return await cb.answer("Нет доступа")
+    await cb.answer("Собираю…")
+    for part in report.chunks(await overdue_text()):
+        await cb.message.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([]))
+
+
+@dp.callback_query(F.data == "wkm")
+async def on_week_menu(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        return await cb.answer("Нет доступа")
+    await cb.answer()
+    await week_btn(cb.message, cb.from_user.id)
 
 
 @dp.message(F.text == DATE_BTN)
@@ -501,7 +539,7 @@ async def on_company_detail(cb: CallbackQuery):
 async def overdue_btn(msg: Message):
     if allowed(msg.from_user.id):
         for part in report.chunks(await overdue_text()):
-            await msg.answer(part, parse_mode=ParseMode.HTML)
+            await msg.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([]))
 
 
 async def overdue_text():
@@ -521,8 +559,12 @@ async def overdue_text():
 
 
 @dp.message(F.text == WEEK_BTN)
-async def week_btn(msg: Message):
-    if allowed(msg.from_user.id):
+async def week_btn_msg(msg: Message):
+    await week_btn(msg, msg.from_user.id)
+
+
+async def week_btn(msg: Message, uid):
+    if allowed(uid):
         t = today()
         await msg.answer("Какую неделю?", reply_markup=kb([[
             ("Эта неделя", f"wk:{t - timedelta(days=t.weekday())}"),
@@ -535,7 +577,7 @@ async def on_week(cb: CallbackQuery):
         return await cb.answer("Нет доступа")
     await cb.answer("Собираю…")
     for part in report.chunks(await week_text(date.fromisoformat(cb.data[3:]))):
-        await cb.message.answer(part, parse_mode=ParseMode.HTML)
+        await cb.message.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([]))
 
 
 async def week_text(monday: date):
@@ -618,7 +660,7 @@ async def broadcast(bot: Bot, text):
     for chat in await recipients():
         for part in report.chunks(text):
             try:
-                await bot.send_message(chat, part, parse_mode=ParseMode.HTML)
+                await bot.send_message(chat, part, parse_mode=ParseMode.HTML, reply_markup=kb([]))
             except Exception:
                 log.exception("рассылка %s", chat)
 
@@ -706,7 +748,7 @@ async def on_lists(cb: CallbackQuery):
                  for t in picked]
         text = "🙋 <b>Мои открытые задачи</b>\n\n" + ("\n".join(lines) if lines else "Задач нет.")
     for part in report.chunks(text):
-        await cb.message.answer(part, parse_mode=ParseMode.HTML)
+        await cb.message.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([]))
 
 
 @dp.callback_query(F.data == "myday")
@@ -717,7 +759,7 @@ async def on_myday(cb: CallbackQuery):
     me = (await yg.me())["id"]
     text = await employee_report(me, today())
     for part in report.chunks(text):
-        await cb.message.answer(part, parse_mode=ParseMode.HTML)
+        await cb.message.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([]))
 
 
 # --- новая задача ---
@@ -919,7 +961,7 @@ async def on_chat_pick(cb: CallbackQuery):
                 f"«{DM_PREFIX}{html.escape(name)}». Его создам при первом сообщении, дальше — туда же.</i>")
     if history:
         for part in report.chunks(f"🕘 <b>Последние сообщения</b>\n{history}"):
-            await cb.message.answer(part, parse_mode=ParseMode.HTML)
+            await cb.message.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([]))
     await cb.message.answer(f"Пишем в {html.escape(drafts[cb.message.chat.id]['where'])}. Напишите сообщение. "
                             f"Отметить человека — через @: «@Константин посмотри отчёт».{note}",
                             parse_mode=ParseMode.HTML, reply_markup=kb([[("✖️ Отмена", "nx")]]))
