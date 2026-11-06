@@ -104,7 +104,7 @@ class YouGile:
         return await self._cached("tasks", 180, lambda: self._all("/task-list"))
 
     async def group_chats(self):
-        return await self._cached("gchats", 1800, lambda: self._all("/group-chats"))
+        return await self._cached("gchats", 300, lambda: self._all("/group-chats"))
 
     # --- задачи ---
 
