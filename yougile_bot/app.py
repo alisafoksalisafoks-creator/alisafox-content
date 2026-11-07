@@ -72,7 +72,7 @@ def full(uid):
 
 def menu(uid=0):
     rows = [[KeyboardButton(text=DATE_BTN), KeyboardButton(text=PERSONAL_BTN)],
-            [KeyboardButton(text=INPUT_BTN), KeyboardButton(text=COMPANY_BTN)],
+            ([KeyboardButton(text=INPUT_BTN)] if ai.client else []) + [KeyboardButton(text=COMPANY_BTN)],
             [KeyboardButton(text=OVERDUE_BTN), KeyboardButton(text=WEEK_BTN)],
             [KeyboardButton(text=CHAT_BTN)]]
     if uid == OWNER:
@@ -98,7 +98,7 @@ def kb(rows, home=True):
 
 def start_kb(uid):
     return kb([[(DATE_BTN, "pick"), (PERSONAL_BTN, "me")],
-               [(INPUT_BTN, "in"), (COMPANY_BTN, f"co:{today()}")],
+               ([(INPUT_BTN, "in")] if ai.client else []) + [(COMPANY_BTN, f"co:{today()}")],
                [(CHAT_BTN, "wch"), (OVERDUE_BTN, "od")],
                [(WEEK_BTN, "wkm")],
                [(ACCESS_BTN, "acc:list")] if uid == OWNER else []], home=False)
@@ -184,8 +184,9 @@ async def start(msg: Message):
                                                      ("✅ Полный", f"acc:full:{uid}")],
                                                     [("❌ Отказать", f"acc:no:{uid}")]]))
         return await msg.answer("Запрос отправлен владельцу. Как только он откроет доступ, я напишу.")
-    await msg.answer("YouGile AlisaFox. Отчёт по сотрудникам — «Выберите дату». Свои задачи — «Личный». "
-                     "Любое действие словами («поставь Веронике задачу до пятницы…») — «Ввод».", reply_markup=menu(uid))
+    await msg.answer("YouGile AlisaFox. Отчёт по сотрудникам — «По дате». Свои задачи — «Личный». "
+                     + ("Любое действие словами («поставь Веронике задачу до пятницы…») — «Ввод»." if ai.client
+                        else "Задачи и сообщения — кнопками «➕ Задача» и «💬 Чаты»."), reply_markup=menu(uid))
     await msg.answer("Что открыть?", reply_markup=start_kb(uid))
 
 
@@ -391,7 +392,7 @@ async def on_employee(cb: CallbackQuery):
     await cb.answer()
     await cb.message.answer(f"<b>{html.escape(await name_of(uid))}</b> · {report.day_title(d)}",
                             parse_mode=ParseMode.HTML, reply_markup=kb([
-                                [("📊 План|Факт", f"pf:{d}:{uid}"), (INPUT_BTN, f"in:{uid}")],
+                                [("📊 План|Факт", f"pf:{d}:{uid}")] + ([(INPUT_BTN, f"in:{uid}")] if ai.client else []),
                                 [("👥 Сотрудники", f"d:{d}"), ("➕ Задача", f"nu:{uid}")]]))
 
 
@@ -1137,7 +1138,7 @@ async def on_voice(msg: Message):
     if not voice.enabled():
         return await msg.answer("Голос не настроен на сервере (нужен пакет faster-whisper). Напишите текстом.")
     if not ai.client:
-        return await msg.answer("Для «Ввода» нужен ключ Claude: ANTHROPIC_API_KEY в .env на сервере.")
+        return await msg.answer("Голосом бот пока не управляет. Задачу — «➕ Задача», сообщение — «💬 Чаты».")
     wait = await msg.answer("🎙 Расшифровываю…")
     try:
         f = await msg.bot.download(msg.voice or msg.audio)
