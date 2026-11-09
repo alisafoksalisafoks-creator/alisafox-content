@@ -686,7 +686,6 @@ async def scheduler(bot: Bot):
                 while prev.weekday() not in WORKDAYS and prev > d - timedelta(days=7):
                     prev -= timedelta(days=1)  # в понедельник — итоги пятницы
                 await broadcast(bot, "☀️ Доброе утро! " + await company_text(prev))
-                await broadcast(bot, await overdue_text())
                 if d.weekday() == 0:
                     await broadcast(bot, await week_text(d - timedelta(days=7)))
             if hm == IDLE_CHECK and d.weekday() in WORKDAYS and not store.meta(f"sent:idle:{d}"):
