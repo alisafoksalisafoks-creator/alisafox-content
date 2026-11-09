@@ -200,6 +200,16 @@ def _later_sheet(wb, plan, directions=None):
                 c.fill = LATER_FILL
 
 
+def _try_sheet(wb, plan, directions=None):
+    """«Попробовать завезти»: есть у нас, продаётся в других кластерах, в этом кластере нет совсем — решает владелец (09.11.2026)."""
+    rows = [[cl, x["offer"], x["shop14"], x["est"], x["status"], x["free"]]
+            for cl, items in plan.try_list.items() if directions is None or cl in directions for x in items]
+    if rows:
+        _sheet(wb, "Попробовать завезти",
+               ["Кластер", "Артикул", "Продажи магазина за 14 дн", "Ждём в кластере за 14 дн (оценка)", "Статус",
+                "Свободно у нас"], rows, [26, 28, 12, 14, 18, 12])
+
+
 def _need(wb, lines, title="Потребность по направлениям"):
     """Весь расчёт по строкам: из чего получилась потребность и сколько везём."""
     ws = _sheet(wb, title,
@@ -226,6 +236,7 @@ def build_direction(plan, name, path, snap_time=""):
     _order_sheet(wb, plan, lines)
     _zero_sheet(wb, plan, {name})
     _later_sheet(wb, plan, {name})
+    _try_sheet(wb, plan, {name})
     _sheet(wb, "Параметры", ["Параметр", "Значение"], [
         ["Направление", name],
         ["Снимок данных", snap_time],
@@ -247,6 +258,7 @@ def build(plan, path, snap_time=""):
     _order_sheet(wb, plan, [x for x in plan.lines if x.qty > 0])
     _zero_sheet(wb, plan)
     _later_sheet(wb, plan)
+    _try_sheet(wb, plan)
 
     _sheet(wb, "Пустые кластеры",
            ["Кластер", "Артикул", "Продажи 14 дн (весь Ozon)", "Рекомендуемый склад", "Свободно у нас"],

@@ -103,6 +103,7 @@ class Plan:
     zero: list = field(default_factory=list)        # строки с рекомендацией 0 и причина — лист «Ноль, проверить»
     info: dict = field(default_factory=dict)        # {артикул: {name, category, status, root, free}} — для листа «Заявка»
     stopped: dict = field(default_factory=dict)     # {кластер: [{offer, need, reason}]} — «Решить / стоп» под итогом кластера
+    try_list: dict = field(default_factory=dict)    # {кластер: [{offer, shop14, est, status, free}]} — «Попробовать завезти» (09.11.2026)
 
     def by_warehouse(self):
         out = defaultdict(list)
@@ -548,6 +549,18 @@ def build(snap, overrides=None):
                 ln.qty, ln.boxes = 0, []
                 continue
         d0 = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
+        smin = min((sz for _, sz in sizes if sz), default=0)
+        if d0 and ln.have > 0 and smin and raw < smin and q != smin and not ln.absent:
+            # коробка должна существовать (09.11.2026: OZ514-X121USB-TC Казань — нужно 11, короб от 40):
+            # запас от 21 дн — ждём следующую отгрузку; меньше — везём один самый маленький короб
+            if ln.have / d0 >= config.BOX_WAIT_DAYS:
+                gap = config.next_gap(ln.cluster)
+                ln.flags.append(f"не везём сейчас: нужно {raw}, а самый маленький короб {smin} шт; запас {ln.have / d0:.0f} дн "
+                                f"— довезти полным коробом в следующую отгрузку, к ней запас ~{max(0, ln.have / d0 - gap):.0f} дн")
+                ln.later = raw
+                ln.qty, ln.boxes = 0, []
+                continue
+            q, box = smin, smin
         later_days = config.FAST_LATER_DAYS if ln.cluster in config.FAST_CLUSTERS else config.TRIGGER_DAYS
         if d0 and ln.have > 0 and ln.have / d0 >= later_days and raw < config.MIN_SHIP and q - raw >= 5:
             # запас от 30 дн, а до цели не хватает меньше минимальной партии — сейчас не везём, довезём в следующую
@@ -565,6 +578,13 @@ def build(snap, overrides=None):
                             f"(больше {config.SLOW_MAX_DAYS}) — повезём со следующей поставкой")
             ln.qty, ln.boxes = 0, []
             continue
+        if d0 and ln.have > 0 and (ln.have + q) / d0 > config.SKIP_AFTER_DAYS and raw < config.SMALL_LOT \
+                and ln.cluster not in config.FAST_CLUSTERS and (ln.have + config.SMALL_LOT) / d0 <= config.SKIP_AFTER_DAYS \
+                and (not smin or smin <= config.SMALL_LOT):
+            # мелочь: 30 шт дали бы больше 80 дн — везём 20 шт, как владелец (09.11.2026, Ростов: OZ432NEW4, OZ511)
+            ln.flags.append(f"{q} шт дали бы {(ln.have + q) / d0:.0f} дн — везём {config.SMALL_LOT} шт")
+            fit20 = max((sz for _, sz in sizes if sz and config.SMALL_LOT % sz == 0), default=0)
+            q, box = config.SMALL_LOT, (fit20 if fit20 == config.SMALL_LOT else None)
         if d0 and ln.have > 0 and (ln.have + q) / d0 > config.SKIP_AFTER_DAYS:
             ln.flags.append(f"не везём: нужно {raw}, но {q} шт дали бы запас {(ln.have + q) / d0:.0f} дн "
                             f"(больше {config.SKIP_AFTER_DAYS})")
@@ -703,6 +723,39 @@ def build(snap, overrides=None):
         plan.zero.append({"warehouse": cl, "offer": offer_name.get(offer, offer), "status": status, "why": why,
                           "sales14": round(v), "available": st["available"], "transit": st["transit"],
                           "category": (u or {}).get("category") or "", "root": (u or {}).get("root") or ""})
+
+    # --- «Попробовать завезти» (09.11.2026): есть у нас, продаётся в других кластерах, а в этом кластере нет совсем ---
+    shipped_cl = {(norm(ln.offer), ln.warehouse) for ln in lines.values() if ln.qty > 0}
+    cl_tot = defaultdict(float)
+    for (o, cl), v in s14c.items():
+        if cl:
+            cl_tot[cl] += v
+    shop_tot = sum(cl_tot.values()) or 1
+    root_of = lambda o: ((snap.unit.get(o) or {}).get("root") or o)
+    present = defaultdict(float)
+    for (o, cl), st in stock_c.items():
+        present[(root_of(o), cl)] += st["available"] + st["transit"]
+    for (o, cl), v in s14c.items():
+        present[(root_of(o), cl)] += v
+    for offer in sorted({o for (o, cl) in s14c if cl}):
+        tot = sum(v for (o, cl), v in s14c.items() if o == offer and cl)
+        if tot < config.TRY_MIN_SHOP14:
+            continue
+        key = _ms_key(offer, snap.unit, ms_by)
+        free = (ms_by[key]["free"] - ms_by[key].get("used", 0)) if key else 0
+        if free <= 0:
+            continue
+        sold_share = sum(cl_tot[cl] for (o, cl), v in s14c.items() if o == offer and cl and v > 0) / shop_tot
+        status = ((snap.unit.get(offer) or {}).get("status") or "нет статуса")
+        for cl in sorted(cl_tot):
+            share = cl_tot[cl] / shop_tot
+            if share < config.EMPTY_CLUSTER_MIN_SHARE or present.get((root_of(offer), cl)) or (offer, cl) in shipped_cl:
+                continue
+            est = tot * share / sold_share if sold_share else 0
+            plan.try_list.setdefault(cl, []).append({"offer": offer_name.get(offer, offer), "shop14": round(tot),
+                                                     "est": round(est, 1), "status": status, "free": free})
+    for cl in plan.try_list:
+        plan.try_list[cl].sort(key=lambda x: -x["est"])
 
     # --- кластеры, где нашего товара нет ни на одном складе ---
     # 1) кластер целиком пуст: ни одного нашего товара ни на одном складе кластера;

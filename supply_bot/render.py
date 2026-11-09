@@ -89,6 +89,10 @@ def warehouse(plan, name):
              for z in plan.zero if z.get("line") is not None and z["line"].later and z["warehouse"] == name]
     stop += (["", f"<b>Довезти в следующую отгрузку</b> — запас от {config.TRIGGER_DAYS} дн, нужно меньше партии "
               f"{config.MIN_SHIP} шт, сейчас не везём:"] + later) if later else []
+    tries = plan.try_list.get(name, [])[:15]
+    stop += (["", "<b>Нет в кластере — можно попробовать</b> (есть у нас, продаётся в других кластерах; решаете вы):"]
+             + [f"🔹 <code>{escape(x['offer'])}</code> — ждём ~{x['est']:.0f} шт за 14 дн, по магазину {x['shop14']}, "
+                f"у нас {fmt(x['free'])}, статус «{escape(x['status'])}»" for x in tries]) if tries else []
     if not items:
         return chunks([f"В {escape(name)} сейчас везти нечего."] + stop)
     where = items[0].cluster if items[0].cluster != name else "кластер"
