@@ -109,56 +109,50 @@ def render(name, d, groups, tasks_by_id, where, column_title, chat_title, partia
     # --- план ---
     if plan_items:
         done = sum(1 for _, s in plan_items if s == "done")
-        lines = [f"🗓 <b>План: {len(plan_items)}, выполнено {done}</b>"]
+        lines = [f"🗓 <b>Сроки на день: {len(plan_items)}, выполнено {done}</b>"]
         icon = {"done": "✅", "open": "⬜️", "late": "⏳"}
         for t, s in plan_items:
             tail = " (срок прошёл раньше)" if s == "late" else ""
             lines.append(f"{icon[s]} {e(clean(t.get('title'), 80))}{tail}")
         out.append("\n".join(lines))
     else:
-        out.append("🗓 <b>План:</b> задач со сроком на этот день нет.")
+        out.append("🗓 <b>Сроки на день:</b> задач со сроком на этот день нет.")
 
-    # --- факт ---
-    boards, task_chats, group_chats = [], [], []
+    # --- факт: по одной строке на задачу, без журнала по минутам ---
+    done_l, work_l, new_l, chats_l = [], [], [], []
     order = sorted(groups.values(), key=lambda g: max(i[0] for i in g["items"]), reverse=True)
     for g in order:
-        t = tasks_by_id.get(g.get("task_id") or "")
-        actions = [(ts, k, x) for ts, k, x, _ in sorted(g["items"], key=lambda i: i[0]) if k != "message"]
-        msgs = [(ts, txt) for ts, k, _, txt in sorted(g["items"], key=lambda i: i[0]) if k == "message"]
+        items = sorted(g["items"], key=lambda i: i[0])
+        kinds = [k for _, k, _, _ in items]
+        msgs = [txt for _, k, _, txt in items if k == "message" and clean(txt)]
+        talk = (f" · 💬 {kinds.count('message')}" + (f": «{e(clean(msgs[-1], 110))}»" if msgs else "")) \
+            if "message" in kinds else ""
         if g.get("chat_id") and not g.get("task_id"):
-            last = clean(msgs[-1][1], 140) if msgs else ""
-            group_chats.append(f"• «{e(chat_title(g['chat_id']))}»: {len(msgs)} сообщ., последнее в {hm(msgs[-1][0])}"
-                               + (f"\n  «{e(last)}»" if last else ""))
+            chats_l.append(f"• «{e(chat_title(g['chat_id']))}»{talk}")
             continue
-        title = f"<b>{e(clean(t.get('title'), 90))}</b>" if t else "<b>задача удалена или нет доступа</b>"
-        place = f"\n  <i>{e(where(t))}</i>" if t else ""
-        if actions:
-            lines = []
-            for ts, kind, extra in actions:
-                if kind == "move":
-                    label = f"➡️ перенесена в «{e(column_title(extra.get('to')))}»"
-                elif kind == "rename" and extra.get("newName"):
-                    label = f"✏️ новое название «{e(clean(extra['newName'], 60))}»"
-                else:
-                    label = LABELS.get(kind, kind)
-                lines.append(f"  {hm(ts)} {label}")
-            boards.append(f"• {title}{place}\n" + "\n".join(lines))
-        if msgs:
-            last = clean(msgs[-1][1], 140)
-            task_chats.append(f"• {title}: {len(msgs)} сообщ., последнее в {hm(msgs[-1][0])}"
-                              + (f"\n  «{e(last)}»" if last else ""))
+        t = tasks_by_id.get(g.get("task_id") or "")
+        title = e(clean(t.get("title"), 70)) if t else "задача удалена или нет доступа"
+        moves = [x.get("to") for _, k, x, _ in items if k == "move"]
+        state = f" → {e(column_title(moves[-1]))}" if moves else (f" · <i>{e(where(t).split(' › ')[-1])}</i>" if t else "")
+        extra = [LABELS[k].split(" ", 1)[-1] for k in dict.fromkeys(kinds)
+                 if k in LABELS and k not in ("add", "done", "move")]
+        tail = (" · " + ", ".join(extra) if extra else "") + talk
+        if "done" in kinds:
+            done_l.append(f"• {title}{tail}")
+        elif "add" in kinds:
+            new_l.append(f"• {title}{state}{tail}")
+        else:
+            work_l.append(f"• {title}{state}{tail}")
     total = count(groups)
     if not total:
         out.append("✅ <b>Факт:</b> действий в YouGile за этот день не найдено.")
     else:
         n_msg = sum(1 for g in groups.values() for i in g["items"] if i[1] == "message")
-        out.append(f"✅ <b>Факт: {total} действий</b> (из них сообщений: {n_msg})")
-        if boards:
-            out.append("📋 <b>Доски задач</b>\n" + "\n".join(boards))
-        if task_chats:
-            out.append("💬 <b>Чаты задач</b>\n" + "\n".join(task_chats))
-        if group_chats:
-            out.append("👥 <b>Групповые чаты</b>\n" + "\n".join(group_chats))
+        out.append(f"<b>Факт за день:</b> задач {len(done_l) + len(work_l) + len(new_l)}, сообщений {n_msg}")
+        for head, lines in (("✅ <b>Выполнено</b>", done_l), ("🔄 <b>В работе</b>", work_l),
+                            ("➕ <b>Новые задачи</b>", new_l), ("👥 <b>Групповые чаты</b>", chats_l)):
+            if lines:
+                out.append(f"{head} ({len(lines)})\n" + "\n".join(lines))
     out.append("<i>Личные переписки YouGile не видны боту: их API не отдаёт.</i>"
                + ("\n<i>Этот день раньше запуска бота: история собрана по задачам сотрудника, могут быть пропуски.</i>"
                   if partial else ""))

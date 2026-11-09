@@ -72,7 +72,7 @@ class TestRender(unittest.TestCase):
         text = report.render("Вероника", D, g, {"t1": tasks[0]}, lambda t: "Доска › В работе",
                              lambda c: "В работе", lambda c: "Чат менеджеров",
                              plan_items=report.plan(U, tasks, START, END))
-        for part in ("План|Факт", "Доски задач", "Чаты задач", "Групповые чаты", "«В работе»",
+        for part in ("План|Факт", "В работе", "💬 1", "Групповые чаты", "→ В работе",
                      "Готово &amp; проверено", "Чат менеджеров", "06.11.2026 (пт)"):
             self.assertIn(part, text)
 
