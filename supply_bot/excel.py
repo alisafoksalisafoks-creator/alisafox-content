@@ -18,6 +18,7 @@ TRY_FILL = PatternFill("solid", fgColor="E2EFDA")     # светло-зелён�
 def _later(plan, wh):
     return [z["line"] for z in plan.zero if z.get("line") is not None and z["line"].later and z["warehouse"] == wh]
 STOP_FONT = Font(color="808080")
+RICH_FILL = PatternFill("solid", fgColor="CFEFE3")   # мятный: у нас много — раскидываем неполным коробом (09.11.2026)
 BOX_FILL = PatternFill("solid", fgColor="E7D7C1")   # бежевый: короб из квантов больше потребности — проверить коробку (09.11.2026)
 
 
@@ -35,6 +36,8 @@ def _fill(ln, partial=False):
     """Цвет строки: платное > выкуп > большой запас (оранжевый) > неполный короб > опт/всплеск/рост."""
     if ln.warn == "платное":
         return WARN_FILL[ln.warn]
+    if ln.rich:
+        return RICH_FILL
     if ln.boxbig:
         return BOX_FILL
     if ln.warn:

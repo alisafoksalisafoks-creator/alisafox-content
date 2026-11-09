@@ -6,6 +6,7 @@
 Дальше: статусы и стопы → лимит «Моего склада» с выравниванием дней запаса →
 полные моно-короба под каждое направление → пустые кластеры и предупреждения.
 """
+import math
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -60,6 +61,7 @@ class Line:
     warn: str = ""            # «платное» (красный) или «выкуп» (сиреневый) — грузим, но подсвечиваем
     later: int = 0            # сколько довезти в следующую отгрузку (запас от 30 дн, нужно меньше партии)
     absent: bool = False      # товара в кластере нет совсем — скорость оценена по другим кластерам
+    rich: int = 0             # у нас на складе товара на N дн продаж магазина (от 60) — раскидываем смелее (мятный)
     boxbig: int = 0           # самый маленький короб из квантов больше потребности — строка бежевая, проверить коробку
 
     @property
@@ -401,6 +403,15 @@ def build(snap, overrides=None):
               if items}
     zero = {"available": 0, "transit": 0}
 
+    # сколько дней продаж магазина лежит у нас на складе (по ключу «Моего склада»)
+    shop14 = defaultdict(float)
+    for (o, _cl), v in s14c.items():
+        if o in eligible:
+            shop14[eligible[o]["key"]] += v
+    for o, e in eligible.items():
+        sp = shop14.get(e["key"], 0) / config.SALES_DAYS
+        e["ffdays"] = ms_by[e["key"]]["free"] / sp if sp and e["key"] else 0
+
     lines = {}
     for (offer, cl) in sorted(set(s30c) | set(stock_c)):
         if offer not in eligible or not cl:
@@ -552,7 +563,19 @@ def build(snap, overrides=None):
                 continue
         d0 = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
         smin = min((sz for _, sz in sizes if sz), default=0)
-        if d0 and ln.have > 0 and smin and raw < smin and q != smin and not ln.absent:
+        ffd = eligible[offer].get("ffdays", 0)
+        rich = False
+        if ffd >= config.FF_RICH_DAYS and d0 and ln.have > 0 and smin and raw < smin and not ln.absent:
+            # у нас много — раскидываем: 20 шт (нужно меньше 20) или круглое от 30, неполным коробом (09.11.2026)
+            rq = config.SMALL_LOT if raw < config.SMALL_LOT else max(config.MIN_SHIP, int(math.ceil(raw / 10.0)) * 10)
+            if (ln.have + rq) / d0 > config.RICH_MAX_DAYS and rq > config.SMALL_LOT:
+                rq = config.SMALL_LOT
+            if (ln.have + rq) / d0 <= config.RICH_MAX_DAYS:
+                rich, q, box = True, rq, None
+                ln.rich = round(ffd)
+                ln.flags.append(f"у нас {ffd:.0f} дн продаж магазина — раскидываем: {rq} шт неполным коробом "
+                                f"(короб в квантах от {smin}), после поставки {(ln.have + rq) / d0:.0f} дн")
+        if not rich and d0 and ln.have > 0 and smin and raw < smin and q != smin and not ln.absent:
             # коробка должна существовать (09.11.2026: OZ514-X121USB-TC Казань — нужно 11, короб от 40):
             # запас от 21 дн — ждём следующую отгрузку; меньше — везём один самый маленький короб
             # 09.11.2026 (OZ435NEW Екб, топ): целый короб даёт не больше 60 дн — везём сразу, не ждём
@@ -566,7 +589,7 @@ def build(snap, overrides=None):
                 continue
             q, box = smin, smin
         later_days = config.FAST_LATER_DAYS if ln.cluster in config.FAST_CLUSTERS else config.trigger_days(0, ln.cluster)
-        if d0 and ln.have > 0 and ln.have / d0 >= later_days and raw < config.MIN_SHIP and q - raw >= 5:
+        if not rich and d0 and ln.have > 0 and ln.have / d0 >= later_days and raw < config.MIN_SHIP and q - raw >= 5:
             # запас от 30 дн, а до цели не хватает меньше минимальной партии — сейчас не везём, довезём в следующую
             # отгрузку (решение владельца 09.11.2026: OZ479-X96WHITE100W нужно 4 → было 30, OZ435-2USBNEW 24 → 30)
             gap = config.next_gap(ln.cluster)
@@ -576,20 +599,20 @@ def build(snap, overrides=None):
             ln.later = raw
             ln.qty, ln.boxes = 0, []
             continue
-        if d0 and ln.have > 0 and ln.have / d0 >= config.ORANGE_WAIT_DAYS and (ln.have + q) / d0 > config.SLOW_MAX_DAYS:
+        if not rich and d0 and ln.have > 0 and ln.have / d0 >= config.ORANGE_WAIT_DAYS and (ln.have + q) / d0 > config.SLOW_MAX_DAYS:
             # оранжевая строка, а запаса ещё от 25 дн — ждём неделю, довезём больше (решение владельца 02.11.2026)
             ln.flags.append(f"не везём: запас {ln.have / d0:.0f} дн, а {q} шт дали бы {(ln.have + q) / d0:.0f} дн "
                             f"(больше {config.SLOW_MAX_DAYS}) — повезём со следующей поставкой")
             ln.qty, ln.boxes = 0, []
             continue
-        if d0 and ln.have > 0 and (ln.have + q) / d0 > config.SKIP_AFTER_DAYS and raw < config.SMALL_LOT \
+        if not rich and d0 and ln.have > 0 and (ln.have + q) / d0 > config.SKIP_AFTER_DAYS and raw < config.SMALL_LOT \
                 and ln.cluster not in config.FAST_CLUSTERS and (ln.have + config.SMALL_LOT) / d0 <= config.SKIP_AFTER_DAYS \
                 and (not smin or smin <= config.SMALL_LOT):
             # мелочь: 30 шт дали бы больше 80 дн — везём 20 шт, как владелец (09.11.2026, Ростов: OZ432NEW4, OZ511)
             ln.flags.append(f"{q} шт дали бы {(ln.have + q) / d0:.0f} дн — везём {config.SMALL_LOT} шт")
             fit20 = max((sz for _, sz in sizes if sz and config.SMALL_LOT % sz == 0), default=0)
             q, box = config.SMALL_LOT, (fit20 if fit20 == config.SMALL_LOT else None)
-        if d0 and ln.have > 0 and (ln.have + q) / d0 > config.SKIP_AFTER_DAYS:
+        if not rich and d0 and ln.have > 0 and (ln.have + q) / d0 > config.SKIP_AFTER_DAYS:
             ln.flags.append(f"не везём: нужно {raw}, но {q} шт дали бы запас {(ln.have + q) / d0:.0f} дн "
                             f"(больше {config.SKIP_AFTER_DAYS})")
             if smin and raw < smin:   # короб из квантов больше потребности — бежевым, проверить коробку (09.11.2026)
@@ -597,7 +620,7 @@ def build(snap, overrides=None):
             ln.qty, ln.boxes = 0, []
             continue
         ln.qty = q
-        if smin and raw < smin and q % smin:   # везём не целый короб из квантов — бежевым (09.11.2026)
+        if not rich and smin and raw < smin and q % smin:   # везём не целый короб из квантов — бежевым (09.11.2026)
             ln.boxbig = smin
             ln.flags.append(f"короб в квантах от {smin} шт, везём {q} — проверьте, есть ли такой короб")
         small = min((sz for _, sz in sizes), default=0)
