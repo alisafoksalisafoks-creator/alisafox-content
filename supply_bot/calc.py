@@ -555,7 +555,8 @@ def build(snap, overrides=None):
         if d0 and ln.have > 0 and smin and raw < smin and q != smin and not ln.absent:
             # коробка должна существовать (09.11.2026: OZ514-X121USB-TC Казань — нужно 11, короб от 40):
             # запас от 21 дн — ждём следующую отгрузку; меньше — везём один самый маленький короб
-            if ln.have / d0 >= config.BOX_WAIT_DAYS:
+            # 09.11.2026 (OZ435NEW Екб, топ): целый короб даёт не больше 60 дн — везём сразу, не ждём
+            if ln.have / d0 >= config.BOX_WAIT_DAYS and (ln.have + smin) / d0 > config.SLOW_MAX_DAYS:
                 gap = config.next_gap(ln.cluster)
                 ln.flags.append(f"не везём сейчас: нужно {raw}, а самый маленький короб {smin} шт; запас {ln.have / d0:.0f} дн "
                                 f"— довезти полным коробом в следующую отгрузку, к ней запас ~{max(0, ln.have / d0 - gap):.0f} дн")
