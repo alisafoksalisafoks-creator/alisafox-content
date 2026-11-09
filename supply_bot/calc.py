@@ -832,10 +832,12 @@ def _prio_rank(p):
 def _ms_key(offer, unit, ms_by):
     """Ключ «Моего склада» для артикула Ozon: сам артикул, корень из таблицы или корень без NEW."""
     o = norm(offer)
-    for k in (o, (unit.get(o) or {}).get("root"), root_of(o)):
-        if k and k in ms_by:
+    keys = [k for k in dict.fromkeys((o, (unit.get(o) or {}).get("root"), root_of(o))) if k and k in ms_by]
+    # 09.11.2026 (OZ538-X38NEW: у NEW 0, 197 шт под OZ538-X38): у самого артикула 0 — берём остаток корня
+    for k in keys:
+        if ms_by[k].get("stock", 0) > 0:
             return k
-    return None
+    return keys[0] if keys else None
 
 
 def _sizes(offer, root, boxes):
