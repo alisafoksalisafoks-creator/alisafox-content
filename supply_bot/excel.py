@@ -11,6 +11,11 @@ HEAD = PatternFill("solid", fgColor="DDE7F0")
 TOTAL = PatternFill("solid", fgColor="F2F2F2")
 PARTIAL_FILL = PatternFill("solid", fgColor="FFF2A8")
 STOP_FILL = PatternFill("solid", fgColor="EDEDED")
+LATER_FILL = PatternFill("solid", fgColor="DDEBF7")   # голубой: запас от 30 дн, нужно меньше партии — довезти в след. отгрузку
+
+
+def _later(plan, wh):
+    return [z["line"] for z in plan.zero if z.get("line") is not None and z["line"].later and z["warehouse"] == wh]
 STOP_FONT = Font(color="808080")
 DEMAND_FILL = {"опт": PatternFill("solid", fgColor="FFD8A8"), "всплеск": PatternFill("solid", fgColor="FFD8A8"),
                "рост": PatternFill("solid", fgColor="C6EFCE")}   # опт и всплеск — оранжевый, рост спроса — зелёный
@@ -84,6 +89,10 @@ def _distribution(wb, plan, groups):
                        None, "не везём", "не везём: " + x["reason"]])
             for c in ws[ws.max_row]:
                 c.fill, c.font = STOP_FILL, STOP_FONT
+        for ln in _later(plan, wh):   # голубым под итогом: сейчас не везём, довезти в следующую отгрузку
+            ws.append([wh, ln.cluster, "", ln.offer, f"({ln.later})", "—", None, None, "след. отгрузка",
+                       next((f for f in ln.flags if f.startswith("не везём сейчас")), "")])
+            _paint(ws, LATER_FILL)
     for c in ws["H"][1:]:
         c.number_format = "DD.MM.YYYY"
 
@@ -118,6 +127,13 @@ def _order_sheet(wb, plan, lines):
                        "не везём: " + x["reason"]])
             for c in ws[ws.max_row]:
                 c.fill, c.font = STOP_FILL, STOP_FONT
+        for ln in _later(plan, wh):
+            inf = plan.info.get(ln.offer, {})
+            ws.append([wh, ln.offer, inf.get("category"), 0, None, ln.transit, ln.sales14, ln.available,
+                       inf.get("free"), inf.get("root"), (inf.get("status") or "").capitalize(), None,
+                       round(ln.days) if ln.days is not None else None,
+                       next((f for f in ln.flags if f.startswith("не везём сейчас")), "")])
+            _paint(ws, LATER_FILL)
     ws.append(["Итого", f"{len(lines)} арт.", None, sum(x.qty for x in lines)])
     for c in ws[ws.max_row]:
         c.font = BOLD
@@ -151,6 +167,8 @@ def _zero_sheet(wb, plan, directions=None):
             ws.append([z["warehouse"], ln.offer, inf.get("category"), 0, None, ln.transit, ln.sales14, ln.available,
                        inf.get("free"), inf.get("root"), (z["status"] or "").capitalize(),
                        z["days"], z["why"]])
+            if ln.later:
+                _paint(ws, LATER_FILL)
         else:
             sp = z["sales14"] / config.SALES_DAYS
             ws.append([z["warehouse"], z["offer"], z["category"], 0, None, z["transit"], z["sales14"], z["available"],
@@ -176,6 +194,10 @@ def _later_sheet(wb, plan, directions=None):
                ["Направление", "Артикул", "Дней запаса сейчас", "Не хватает до цели, шт", "Продано за 2 недели",
                 "Остатки Ozon", "Транзит", "Остатки наш склад", "Почему не сейчас"],
                rows, [22, 26, 10, 11, 11, 10, 9, 11, 70])
+        ws = wb["Довезти в след. отгрузку"]
+        for r in ws.iter_rows(min_row=2):
+            for c in r:
+                c.fill = LATER_FILL
 
 
 def _need(wb, lines, title="Потребность по направлениям"):

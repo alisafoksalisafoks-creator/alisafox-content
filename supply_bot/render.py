@@ -85,7 +85,7 @@ def warehouse(plan, name):
     stop = [f"⬜ <code>{escape(x['offer'])}</code> — не везём (нужно было бы {fmt(x['need'])}): {escape(x['reason'])}"
             for x in plan.stopped.get(name, [])]
     stop = (["", "<b>Решить / стоп</b> — не везём, в итог не входят:"] + stop) if stop else []
-    later = [f"⏭ <code>{escape(z['line'].offer)}</code> — не хватает {fmt(z['line'].later)} шт, запас {z['days']} дн"
+    later = [f"🟦 <code>{escape(z['line'].offer)}</code> — не хватает {fmt(z['line'].later)} шт, запас {z['days']} дн"
              for z in plan.zero if z.get("line") is not None and z["line"].later and z["warehouse"] == name]
     stop += (["", f"<b>Довезти в следующую отгрузку</b> — запас от {config.TRIGGER_DAYS} дн, нужно меньше партии "
               f"{config.MIN_SHIP} шт, сейчас не везём:"] + later) if later else []
