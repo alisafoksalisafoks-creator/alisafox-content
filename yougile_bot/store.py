@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS subs (tg_chat INTEGER, yg_chat TEXT, PRIMARY KEY (tg_chat, yg_chat));  -- пересылка ответов
 CREATE TABLE IF NOT EXISTS bot_users (tg_id INTEGER PRIMARY KEY, name TEXT, role TEXT);  -- role: view | full
 """)
+if "yg_id" not in [r[1] for r in db.execute("PRAGMA table_info(bot_users)")]:
+    db.execute("ALTER TABLE bot_users ADD COLUMN yg_id TEXT")  # кто этот человек в YouGile — для «Личного»
+    db.commit()
 
 
 def meta(key, default=None):
@@ -82,8 +85,19 @@ def bot_users():
 
 
 def set_bot_user(tg_id, name, role="view"):
-    db.execute("INSERT OR REPLACE INTO bot_users VALUES (?, ?, ?)", (int(tg_id), name, role))
+    db.execute("INSERT INTO bot_users (tg_id, name, role) VALUES (?, ?, ?) "
+               "ON CONFLICT(tg_id) DO UPDATE SET name=excluded.name, role=excluded.role", (int(tg_id), name, role))
     db.commit()
+
+
+def set_yg(tg_id, yg_id):
+    db.execute("UPDATE bot_users SET yg_id=? WHERE tg_id=?", (yg_id, int(tg_id)))
+    db.commit()
+
+
+def yg_of(tg_id):
+    row = db.execute("SELECT yg_id FROM bot_users WHERE tg_id=?", (int(tg_id),)).fetchone()
+    return row[0] if row else None
 
 
 def remove_bot_user(tg_id):

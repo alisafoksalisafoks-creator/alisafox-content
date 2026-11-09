@@ -227,10 +227,46 @@ async def date_btn(msg: Message):
 
 @dp.message(F.text == PERSONAL_BTN)
 async def personal_btn(msg: Message):
-    if full(msg.from_user.id):
-        await personal(msg)
-    elif allowed(msg.from_user.id):
-        await msg.answer("«Личный» — раздел владельца. Нужен полный доступ.")
+    if allowed(msg.from_user.id):
+        await personal(msg, msg.from_user.id)
+
+
+async def my_yg(uid):
+    """Кто этот человек в YouGile. Владелец — владелец ключа, остальные — как привязал владелец в «Доступе»."""
+    if uid == OWNER or uid in USERS:
+        return (await yg.me())["id"]
+    return store.yg_of(uid)
+
+
+async def link_kb(tg_id):
+    """Кнопки «кто это в YouGile» для привязки пользователя бота."""
+    rows, row = [], []
+    for u in await yg.users():
+        if u.get("deleted"):
+            continue
+        name = mapping().get(u["id"], {}).get("name") or report.short_name(u.get("realName") or u.get("email"))
+        row.append((name[:20], f"lk:{tg_id}:{u['id']}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    rows.append(row)
+    return kb(rows)
+
+
+async def ask_link(msg: Message, tg_id, name):
+    await msg.answer(f"Кто <b>{html.escape(name)}</b> в YouGile? Бот будет показывать в «Личном» задачи этого человека.",
+                     parse_mode=ParseMode.HTML, reply_markup=await link_kb(tg_id))
+
+
+@dp.callback_query(F.data.startswith("lk:"))
+async def on_link(cb: CallbackQuery):
+    if cb.from_user.id != OWNER:
+        return await cb.answer("Только для владельца")
+    _, tg_id, yg_id = cb.data.split(":", 2)
+    store.set_yg(int(tg_id), yg_id)
+    await cb.answer("Привязал")
+    await cb.message.edit_reply_markup(reply_markup=None)
+    await cb.message.answer(f"✅ В «Личном» будут задачи: {html.escape(await name_of(yg_id))}.")
 
 
 # --- доступ (только владелец) ---
@@ -246,13 +282,15 @@ async def access_btn(msg: Message):
 
 async def access_list(msg: Message):
     u = store.bot_users()
+    links = {i: await name_of(store.yg_of(i)) if store.yg_of(i) else None for i in u}
     text = ("<b>Доступ к боту</b>\nУ вас полный доступ всегда.\n\n"
             "👁 отчёты — смотрит даты, План|Факт, итоги.\n✅ полный — ещё ставит задачи и пишет в YouGile "
             "(от имени владельца ключа).\n\n"
-            + ("\n".join(f"• {html.escape(n)} — {ROLE.get(r, r)}, ID {i}" for i, (n, r) in u.items())
+            + ("\n".join(f"• {html.escape(n)} — {ROLE.get(r, r)}, YouGile: {html.escape(links.get(i) or '❓ не указан')}"
+                         for i, (n, r) in u.items())
                or "Других пользователей пока нет."))
     rows = [[(f"{'👁→✅' if r == 'view' else '✅→👁'} {n[:12]}", f"acc:{'full' if r == 'view' else 'view'}:{i}"),
-             ("🗑 Убрать", f"acc:del:{i}")] for i, (n, r) in u.items()]
+             ("🔗 Кто в YouGile", f"acc:link:{i}"), ("🗑", f"acc:del:{i}")] for i, (n, r) in u.items()]
     rows.append([("➕ Добавить по ID", "acc:add")])
     await msg.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb(rows))
 
@@ -278,6 +316,7 @@ async def on_access(cb: CallbackQuery):
             return await access_list(cb.message)
         await cb.message.edit_reply_markup(reply_markup=None)
         await cb.message.answer(f"Доступ открыт: {html.escape(name)} — {ROLE[parts[1]]}.")
+        await ask_link(cb.message, uid, name)
         try:
             await cb.bot.send_message(uid, "Доступ к боту YouGile открыт. Нажмите /start.")
         except Exception:
@@ -286,6 +325,8 @@ async def on_access(cb: CallbackQuery):
         access_requests.pop(uid, None)
         await cb.message.edit_reply_markup(reply_markup=None)
         await cb.message.answer("Отказано.")
+    elif parts[1] == "link":
+        await ask_link(cb.message, uid, store.bot_users().get(uid, (f"ID {uid}", ""))[0])
     elif parts[1] == "del":
         store.remove_bot_user(uid)
         drafts.pop(uid, None)
@@ -302,7 +343,7 @@ async def on_access_id(msg: Message):
         return await msg.answer("Нужен ID из цифр, например 123456789 Анна. Нажмите «Добавить по ID» ещё раз.")
     store.set_bot_user(int(head), name.strip() or f"ID {head}", "view")
     await msg.answer(f"Добавил: {html.escape(name.strip() or head)} — 👁 только отчёты. Роль меняется в списке.")
-    await access_list(msg)
+    await ask_link(msg, int(head), name.strip() or f"ID {head}")
 
 
 # --- календарь ---
@@ -767,20 +808,22 @@ async def scheduler(bot: Bot):
 
 # --- личный раздел ---
 
-async def personal(msg: Message):
-    await msg.answer("Личный раздел.", reply_markup=kb([
-        [("➕ Поставить задачу", "nt")],
-        [("📌 Поставил я", "mine"), ("🙋 Мои задачи", "my")],
-        [("📝 Мой день", "myday")],
-    ]))
+async def personal(msg: Message, uid):
+    me = await my_yg(uid)
+    if not me:
+        return await msg.answer("Владелец ещё не указал, кто вы в YouGile. Попросите его: «👥 Доступ» → "
+                                "«🔗 Кто в YouGile» у вашего имени.")
+    rows = [[("➕ Поставить задачу", "nt")]] if full(uid) else []
+    rows += [[("📌 Поставил я", "mine"), ("🙋 Мои задачи", "my")], [("📝 Мой день", "myday")]]
+    await msg.answer(f"Личный раздел · {html.escape(await name_of(me))}", reply_markup=kb(rows))
 
 
 @dp.callback_query(F.data == "me")
 async def on_me(cb: CallbackQuery):
-    if not full(cb.from_user.id):
-        return await cb.answer("Нужен полный доступ", show_alert=True)
+    if not allowed(cb.from_user.id):
+        return await cb.answer("Нет доступа")
     await cb.answer()
-    await personal(cb.message)
+    await personal(cb.message, cb.from_user.id)
 
 
 def deadline_text(t):
@@ -794,10 +837,10 @@ def deadline_text(t):
 
 @dp.callback_query(F.data.in_({"mine", "my"}))
 async def on_lists(cb: CallbackQuery):
-    if not full(cb.from_user.id):
-        return await cb.answer("Нужен полный доступ", show_alert=True)
+    me = await my_yg(cb.from_user.id) if allowed(cb.from_user.id) else None
+    if not me:
+        return await cb.answer("Не знаю, кто вы в YouGile — спросите владельца", show_alert=True)
     await cb.answer("Собираю…")
-    me = (await yg.me())["id"]
     tasks, by_id, columns, where, _ = await lookups()
     open_tasks = [t for t in tasks if not t.get("deleted") and not t.get("archived") and not t.get("completed")]
     if cb.data == "mine":
@@ -824,10 +867,10 @@ async def on_lists(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "myday")
 async def on_myday(cb: CallbackQuery):
-    if not full(cb.from_user.id):
-        return await cb.answer("Нужен полный доступ", show_alert=True)
+    me = await my_yg(cb.from_user.id) if allowed(cb.from_user.id) else None
+    if not me:
+        return await cb.answer("Не знаю, кто вы в YouGile — спросите владельца", show_alert=True)
     await cb.answer("Собираю…")
-    me = (await yg.me())["id"]
     text = await employee_report(me, today())
     for part in report.chunks(text):
         await cb.message.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([]))
