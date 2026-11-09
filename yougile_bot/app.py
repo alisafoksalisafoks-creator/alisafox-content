@@ -9,6 +9,7 @@ import html
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -54,6 +55,7 @@ CHAT_BTN = "💬 Чаты"
 OLD_BTNS = {"📅 Выберите дату": "📅 По дате", "🏢 Итоги дня компании": "🏢 Итоги дня",
             "👥 Добавить пользователя": "👥 Доступ", "💬 Написать в чат": "💬 Чаты"}
 WEEK_BTN = "📈 Неделя"
+NEWS_BTN = "🔔 Новое в чатах"
 MORNING = os.environ.get("YG_MORNING", "09:00")  # автоотчёт: итоги вчера и просрочки
 IDLE_CHECK = os.environ.get("YG_IDLE_CHECK", "11:00")  # сигнал «нет активности»
 WORKDAYS = {int(x) for x in os.environ.get("YG_WORKDAYS", "0,1,2,3,4").split(",") if x.strip()}  # 0 — пн
@@ -74,7 +76,7 @@ def menu(uid=0):
     rows = [[KeyboardButton(text=DATE_BTN), KeyboardButton(text=PERSONAL_BTN)],
             ([KeyboardButton(text=INPUT_BTN)] if ai.client else []) + [KeyboardButton(text=COMPANY_BTN)],
             [KeyboardButton(text=OVERDUE_BTN), KeyboardButton(text=WEEK_BTN)],
-            [KeyboardButton(text=CHAT_BTN)]]
+            [KeyboardButton(text=CHAT_BTN), KeyboardButton(text=NEWS_BTN)]]
     if uid == OWNER:
         rows.append([KeyboardButton(text=ACCESS_BTN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
@@ -100,7 +102,7 @@ def start_kb(uid):
     return kb([[(DATE_BTN, "pick"), (PERSONAL_BTN, "me")],
                ([(INPUT_BTN, "in")] if ai.client else []) + [(COMPANY_BTN, f"co:{today()}")],
                [(CHAT_BTN, "wch"), (OVERDUE_BTN, "od")],
-               [(WEEK_BTN, "wkm")],
+               [(WEEK_BTN, "wkm"), (NEWS_BTN, "nw")],
                [(ACCESS_BTN, "acc:list")] if uid == OWNER else []], home=False)
 
 
@@ -1064,36 +1066,65 @@ async def on_chat_send(cb: CallbackQuery):
     drafts.pop(cb.message.chat.id, None)
     store.subscribe(cb.message.chat.id, dr["chat_id"])
     await cb.message.edit_reply_markup(reply_markup=None)
-    await cb.message.answer(f"✅ Отправлено в {html.escape(dr['where'])}. Ответы из этого чата пришлю сюда.",
-                            reply_markup=kb([[("🔕 Без ответов", f"un:{dr['chat_id']}"), (CHAT_BTN, "wch")]]))
+    await cb.message.answer(f"✅ Отправлено в {html.escape(dr['where'])}. Ответы — по кнопке «🔔 Новое в чатах».",
+                            reply_markup=kb([[(NEWS_BTN, "nw"), (CHAT_BTN, "wch")]]))
 
 
 @dp.callback_query(F.data.startswith("un:"))
 async def on_unsub(cb: CallbackQuery):
     store.unsubscribe(cb.message.chat.id, cb.data[3:])
-    await cb.answer("Больше не присылаю сообщения из этого чата")
+    await cb.answer("Этот чат больше не показываю в «Новое в чатах»")
     await cb.message.edit_reply_markup(reply_markup=None)
 
 
 async def forward_reply(chat_id, msg_id, from_user, text):
-    """Новое сообщение в чате, куда владелец писал через бота, — в Telegram с кнопкой «Ответить»."""
-    subs = store.subscribers(chat_id)
-    if not subs or not BOT:
+    """Сам бот ничего не присылает: сообщения копятся в журнале и показываются по кнопке «🔔 Новое в чатах»."""
+    return
+
+
+@dp.message(F.text == NEWS_BTN)
+async def news_msg(msg: Message):
+    await show_news(msg, msg.from_user.id)
+
+
+@dp.callback_query(F.data == "nw")
+async def news_cb(cb: CallbackQuery):
+    await cb.answer()
+    await show_news(cb.message, cb.from_user.id)
+
+
+async def show_news(msg: Message, uid):
+    """Новые сообщения в чатах, куда человек писал через бота, с прошлого просмотра."""
+    if not allowed(uid):
         return
+    chats = store.chats_of(msg.chat.id)
+    if not chats:
+        return await msg.answer("Пока нет чатов, куда вы писали через бота. Напишите через «💬 Чаты» — "
+                                "ответы из них будут здесь.", reply_markup=kb([[(CHAT_BTN, "wch")]]))
+    key = f"seen:{msg.chat.id}"
+    since = int(store.meta(key, 0)) or int(time.time() * 1000) - 3 * 86400_000
+    now = int(time.time() * 1000)
     try:
-        if from_user == (await yg.me())["id"]:
-            return  # своё же сообщение (в том числе отправленное ботом) не пересылаем
-        body = (f"💬 <b>{html.escape(await chat_title(chat_id))}</b>\n"
-                f"<b>{html.escape(await name_of(from_user))}</b>: {html.escape(await readable(text))}")
+        me = (await yg.me())["id"]
     except YouGileError:
-        log.exception("пересылка")
-        return
-    for tg in subs:
-        try:
-            await BOT.send_message(tg, body, parse_mode=ParseMode.HTML, reply_markup=kb([
-                [("↩️ Ответить", f"wc:{chat_id}"), ("🔕 Без ответов", f"un:{chat_id}")]]))
-        except Exception:
-            log.exception("пересылка в %s", tg)
+        me = None
+    rows = [e for e in store.between(since, now + 1) if e["kind"] == "message" and e["chat_id"] in chats
+            and e["user_id"] != me]
+    store.set_meta(key, now)
+    if not rows:
+        return await msg.answer("Новых сообщений нет.", reply_markup=kb([[(CHAT_BTN, "wch")]]))
+    by_chat = {}
+    for e in rows:
+        by_chat.setdefault(e["chat_id"], []).append(e)
+    for chat_id, items in by_chat.items():
+        lines = [f"💬 <b>{html.escape(await chat_title(chat_id))}</b>"]
+        if len(items) > 15:
+            lines.append(f"…ещё {len(items) - 15} раньше")
+        for e in items[-15:]:
+            lines.append(f"<b>{html.escape(await name_of(e['user_id']))}</b>: {html.escape(await readable(e['text']))}")
+        for part in report.chunks("\n".join(lines)):
+            await msg.answer(part, parse_mode=ParseMode.HTML, reply_markup=kb([
+                [("↩️ Ответить", f"wc:{chat_id}"), ("🔕 Не следить", f"un:{chat_id}")]]))
 
 
 # --- ввод словами ---
@@ -1258,11 +1289,11 @@ async def on_input_ok(cb: CallbackQuery):
             elif a["type"] == "group_chat_message":
                 await yg.send_message(a["chat_id"], a["text"], a["mention_ids"])
                 store.subscribe(cb.message.chat.id, a["chat_id"])
-                done.append("✅ Сообщение в чат отправлено, ответы пришлю сюда")
+                done.append("✅ Сообщение в чат отправлено, ответы — в «🔔 Новое в чатах»")
             else:
                 await yg.send_message(a["task_id"], a["text"], a["mention_ids"])
                 store.subscribe(cb.message.chat.id, a["task_id"])
-                done.append("✅ Сообщение в задачу отправлено, ответы пришлю сюда")
+                done.append("✅ Сообщение в задачу отправлено, ответы — в «🔔 Новое в чатах»")
             a["done"] = True  # повторное «Выполнить» после ошибки не продублирует сделанное
         except (YouGileError, ValueError) as e:
             log.exception("ввод: выполнение")

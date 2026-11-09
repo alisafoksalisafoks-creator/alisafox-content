@@ -105,3 +105,7 @@ def unsubscribe(tg_chat, yg_chat):
 
 def subscribers(yg_chat):
     return [r[0] for r in db.execute("SELECT tg_chat FROM subs WHERE yg_chat=?", (yg_chat,))]
+
+
+def chats_of(tg_chat):
+    return {r[0] for r in db.execute("SELECT yg_chat FROM subs WHERE tg_chat=?", (int(tg_chat),))}
