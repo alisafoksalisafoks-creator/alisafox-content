@@ -426,6 +426,45 @@ async def on_plan_fact(cb: CallbackQuery):
 briefs: dict[tuple, str] = {}  # конспекты: (вид, день, кто, число действий) → текст; новые действия — новый конспект
 
 
+pf_cache: dict[tuple, tuple] = {}  # (задача, день) → (когда прочитано, сообщения)
+
+
+async def pf_day(uid, d: date, tasks, columns):
+    """План/факт, который сотрудник сам пишет в задаче «ПЛАН/ФАКТ ДНЯ»: его сообщения в её чате за день
+    и описание, если задачу на этот день он создал. → (названия задач, [(ts, текст, задача)])."""
+    start, end = report.day_window(d, TZ)
+    found = report.pf_tasks(uid, tasks, columns, start, end)
+    entries = []
+    past = end < time.time() * 1000
+    for t in found:
+        key = (t["id"], start)
+        hit = pf_cache.get(key)
+        if not hit or (not past and time.time() - hit[0] > 120):
+            msgs = [m for m in await yg.messages(t["id"], start, uid)
+                    if m.get("id") and start <= m["id"] < end and not m.get("deleted")]
+            pf_cache[key] = hit = (time.time(), msgs)
+            for m in msgs:
+                store.add(f"msg:{t['id']}:{m['id']}", m["id"], m.get("fromUserId"), "message",
+                          task_id=t["id"], chat_id=t["id"], text=m.get("text"))
+        if start <= (t.get("timestamp") or 0) < end and report.clean(t.get("description")):
+            entries.append((t["timestamp"], report.clean_lines(t["description"]), t.get("title")))
+        for m in hit[1]:
+            text = report.clean_lines(await readable_lines(m.get("text")))
+            if text:
+                entries.append((m["id"], text, t.get("title")))
+    if len(pf_cache) > 2000:
+        pf_cache.clear()
+    return [t.get("title") or "" for t in found], sorted(entries, key=lambda x: x[0])
+
+
+async def readable_lines(text):
+    import re
+    text = text or ""
+    for u in set(re.findall(r"\[!mention:([\w-]+)!\]", text)):
+        text = text.replace(f"[!mention:{u}!]", "@" + await name_of(u))
+    return text
+
+
 async def employee_data(uid, d: date):
     start, end = report.day_window(d, TZ)
     tasks, by_id, columns, where, column_title = await lookups()
@@ -435,11 +474,18 @@ async def employee_data(uid, d: date):
     groups = report.collect(uid, store.between(start, end), tasks, start, end)
     titles = {c["id"]: c.get("title") or "групповой" for c in await yg.group_chats()}
     plan = report.plan(uid, tasks, start, end)
+    pf_titles, pf = await pf_day(uid, d, tasks, columns)
+    groups = report.collect(uid, store.between(start, end), tasks, start, end)  # с сообщениями из план/факта
     name = await name_of(uid)
     chat = lambda c: titles.get(c, "групповой")  # noqa: E731
-    return {"name": name, "partial": partial, "groups": groups, "plan": plan,
-            "detail": report.render(name, d, groups, by_id, where, column_title, chat, partial, plan),
-            "facts": report.digest(groups, by_id, column_title, chat, plan)}
+    pf_ids = {t["id"] for t in report.pf_tasks(uid, tasks, columns, start, end)}
+    rest_groups = {k: g for k, g in groups.items() if g.get("task_id") not in pf_ids}  # план/факт — своим разделом
+    detail = report.render(name, d, rest_groups, by_id, where, column_title, chat, partial, plan)
+    head, sep, rest = detail.partition("\n\n")
+    detail = head + "\n\n" + report.pf_block(pf, pf_titles, TZ) + (sep + rest if sep else "")
+    facts = "\n".join(x for x in (report.pf_digest(pf), report.digest(rest_groups, by_id, column_title, chat, plan)) if x)
+    return {"name": name, "partial": partial, "groups": groups, "plan": plan, "pf": pf,
+            "pf_mark": report.pf_mark(pf, TZ, bool(pf_titles)), "detail": detail, "facts": facts}
 
 
 async def employee_report(uid, d: date):
@@ -450,13 +496,14 @@ async def employee_brief(r, uid, d: date):
     """Конспект за день от Claude. Без ключа или при ошибке — подробный разбор."""
     n = report.count(r["groups"])
     head = f"📝 <b>{html.escape(r['name'])}</b> · {report.day_title(d)}"
-    if not n and not r["plan"]:
-        return head + "\n\nДействий в YouGile за этот день нет."
+    if not n and not r["plan"] and not r["pf"]:
+        return head + "\n\nДействий в YouGile за этот день нет.\n" + r["pf_mark"]
     done = sum(1 for _, s in r["plan"] if s == "done")
-    stat = f"Действий: {n}" + (f" · план {done} из {len(r['plan'])}" if r["plan"] else "")
+    stat = (f"Действий: {n}" + (f" · сроки {done} из {len(r['plan'])}" if r["plan"] else "")
+            + " · " + r["pf_mark"])
     if not ai.client:
         return r["detail"]
-    key = ("e", d, uid, n, done)
+    key = ("e", d, uid, n, done, len(r["pf"]))
     if len(briefs) > 500:
         briefs.clear()
     if key not in briefs:
@@ -621,6 +668,16 @@ async def company_text(d: date, detail=False):
     tasks, by_id, columns, where, column_title = await lookups()
     titles = {c["id"]: c.get("title") or "групповой" for c in await yg.group_chats()}
     chat = lambda c: titles.get(c, "групповой")  # noqa: E731
+    # план/факт дня по сотрудникам из кнопок
+    pf_marks, pf_texts, no_pf = {}, {}, []
+    for uid, ename in await employees():
+        titles_, pf = await pf_day(uid, d, tasks, columns)
+        pf_marks[ename] = report.pf_mark(pf, TZ, bool(titles_))
+        pf_texts[ename] = report.pf_digest(pf)
+        if titles_ and not all(report.pf_status(pf, TZ)):
+            no_pf.append(ename)
+    pf_line = ("📝 Не дописали план/факт дня: " + html.escape(", ".join(no_pf))) if no_pf else \
+        "📝 План/факт дня написали все."
     events = store.between(start, end)
     rows, idle = [], []
     for u in await yg.users():
@@ -636,17 +693,24 @@ async def company_text(d: date, detail=False):
     rows.sort(key=lambda r: -r[0])
     partial = start < collected_from()
     idle.sort()
+
+    def plain():
+        lines = [report.company_line(n, g, by_id) + (f" · {pf_marks[n]}" if n in pf_marks else "")
+                 for _, n, g in rows]
+        return report.company(d, lines, idle, partial) + "\n\n" + pf_line
+
     if detail or not ai.client or not rows:
-        return report.company(d, [report.company_line(n, g, by_id) for _, n, g in rows], idle, partial)
+        return plain()
     total = sum(r[0] for r in rows)
-    key = ("c", d, total)
+    key = ("c", d, total, sum(len(x) for x in pf_texts.values()))
     if key not in briefs:
-        people = [(name, report.digest(g, by_id, column_title, chat)) for _, name, g in rows]
+        people = [(name, "\n".join(x for x in (pf_texts.get(name), report.digest(g, by_id, column_title, chat)) if x))
+                  for _, name, g in rows]
         try:
             briefs[key] = await ai.brief_company(report.day_title(d), people, idle, partial)
         except Exception:
             log.exception("конспект компании")
-            return report.company(d, [report.company_line(n, g, by_id) for _, n, g in rows], idle, partial)
+            return plain()
     lines = []
     for line in briefs[key].splitlines():
         line = line.strip().lstrip("•-– ").strip()
@@ -658,6 +722,7 @@ async def company_text(d: date, detail=False):
     text = [f"🏢 <b>Итоги дня компании</b> · {report.day_title(d)}", f"Работали в YouGile: {len(rows)}", ""] + lines
     if idle:
         text += ["", "Без действий: " + html.escape(", ".join(idle))]
+    text += ["", pf_line]
     if partial:
         text.append("<i>День раньше запуска бота — данные неполные.</i>")
     return "\n".join(text)

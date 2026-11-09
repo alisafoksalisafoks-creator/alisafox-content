@@ -96,5 +96,24 @@ class TestChunks(unittest.TestCase):
         self.assertEqual(report.first_word("Вероника"), "вероника")
 
 
+class TestPlanFactDay(unittest.TestCase):
+    def test_find_and_status(self):
+        tz = ZoneInfo("Asia/Yekaterinburg")
+        start, end = report.day_window(date(2026, 11, 9), tz)
+        cols = {"c1": {"title": "В работе"}, "c2": {"title": "ПЛАН/ФАКТ ДНЯ"}}
+        tasks = [{"id": "a", "title": "ПЛАН/ФАКТ ДНЯ Вероника", "assigned": ["u"], "columnId": "c1", "timestamp": 1},
+                 {"id": "b", "title": "План - факт дня 2026.11.02", "assigned": ["u"], "columnId": "c1",
+                  "timestamp": 2, "completed": True, "completedTimestamp": start - 1},
+                 {"id": "c", "title": "Закупка", "assigned": ["u"], "columnId": "c2", "timestamp": 3},
+                 {"id": "d", "title": "Заполнить план факт финансисту", "assigned": ["u"], "columnId": "c1",
+                  "timestamp": 4}]
+        self.assertEqual({t["id"] for t in report.pf_tasks("u", tasks, cols, start, end)}, {"a", "c"})
+        morning = start + 9 * 3600_000
+        self.assertEqual(report.pf_status([(morning, "План: цены", "")], tz), (True, False))
+        self.assertEqual(report.pf_status([(morning, "План", ""), (morning + 1, "сделала", "")], tz), (True, True))
+        self.assertEqual(report.pf_status([], tz), (False, False))
+        self.assertEqual(report.clean_lines("1) а<br>2) б"), "1) а\n2) б")
+
+
 if __name__ == "__main__":
     unittest.main()

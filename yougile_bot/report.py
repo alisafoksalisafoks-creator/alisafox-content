@@ -280,3 +280,74 @@ def chunks(text, limit=3900):
             cur = ""
         cur = f"{cur}{sep}{piece}" if cur else piece
     return out + ([cur] if cur else [])
+
+
+# --- план/факт дня, который сотрудник пишет сам в своей задаче ---
+
+PF_RE = re.compile(r"план\W{0,5}факт\W{0,5}дня|план\s+на\s+день|план\s+дня|факт\s+дня", re.I)
+REPORT_RE = re.compile(r"✅|✔|факт|итог|отч[её]т|сделан|выполн", re.I)
+
+
+def pf_tasks(user_id, tasks, columns, start, end):
+    """Задачи «ПЛАН/ФАКТ ДНЯ …» сотрудника: по названию или по колонке «ПЛАН/ФАКТ ДНЯ»."""
+    out = []
+    for t in tasks:
+        if t.get("deleted") or (t.get("timestamp") or 0) >= end:
+            continue
+        if user_id not in (t.get("assigned") or []) and t.get("createdBy") != user_id:
+            continue
+        col = (columns.get(t.get("columnId") or "") or {}).get("title") or ""
+        if not (PF_RE.search(t.get("title") or "") or PF_RE.search(col)):
+            continue
+        if t.get("completed") and (t.get("completedTimestamp") or 0) < start:
+            continue
+        out.append(t)
+    return sorted(out, key=lambda t: t.get("timestamp") or 0, reverse=True)[:4]
+
+
+def clean_lines(text, limit=1500):
+    """Как clean, но с переносами строк: план обычно пишут списком."""
+    text = re.sub(r"<br\s*/?>|</p>|</li>|</div>", "\n", text or "", flags=re.I)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    lines = [re.sub(r"[ \t]+", " ", x).strip() for x in text.splitlines()]
+    text = "\n".join(x for x in lines if x)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def pf_status(entries, tz):
+    """entries [(ts, text, title)] → (план есть, отчёт есть). Отчёт — второе сообщение за день,
+    сообщение после 15:00 или с отметками «✅», «факт», «итог», «сделано»."""
+    if not entries:
+        return False, False
+    late = any(datetime.fromtimestamp(ts / 1000, tz).hour >= 15 for ts, _, _ in entries)
+    marked = any(REPORT_RE.search(txt) for _, txt, _ in entries)
+    return True, len(entries) > 1 or late or marked
+
+
+def pf_mark(entries, tz, has_task=True):
+    if not has_task:
+        return "📝 нет задачи план/факт"
+    p, r = pf_status(entries, tz)
+    return f"📝 план {'✅' if p else '⬜️'} отчёт {'✅' if r else '⬜️'}"
+
+
+def pf_block(entries, titles, tz):
+    """Раздел для План|Факт: что сотрудник сам написал за день."""
+    e = html.escape
+    if not titles:
+        return "📝 <b>План/факт дня:</b> задачи «ПЛАН/ФАКТ ДНЯ» у сотрудника нет."
+    head = "📝 <b>План/факт дня</b> — " + ", ".join(f"«{e(clean(x, 50))}»" for x in titles)
+    if not entries:
+        return head + "\nЗа этот день ничего не написано."
+    p, r = pf_status(entries, tz)
+    out = [head, f"План {'✅' if p else '⬜️'} · отчёт {'✅' if r else '⬜️'}"]
+    for ts, txt, _ in entries:
+        out.append(f"\n🕘 <b>{hm(ts)}</b>\n{e(txt)}")
+    return "\n".join(out)
+
+
+def pf_digest(entries):
+    if not entries:
+        return ""
+    return "План/факт дня, написанный самим сотрудником:\n" + "\n---\n".join(
+        clean_lines(t, 800) for _, t, _ in entries)
