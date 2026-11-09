@@ -60,6 +60,7 @@ class Line:
     warn: str = ""            # «платное» (красный) или «выкуп» (сиреневый) — грузим, но подсвечиваем
     later: int = 0            # сколько довезти в следующую отгрузку (запас от 30 дн, нужно меньше партии)
     absent: bool = False      # товара в кластере нет совсем — скорость оценена по другим кластерам
+    boxbig: int = 0           # самый маленький короб из квантов больше потребности — строка бежевая, проверить коробку
 
     @property
     def eff14(self):
@@ -133,8 +134,8 @@ def demand_spikes(rows, today):
     Всплесков 2 и больше за последние 7 дней — пошёл спрос: всплески оставляем, подсказка «спрос растёт».
     Возвращает ({(артикул, день): доля, которую оставляем}, {артикул: {kind, text}}).
     """
-    days14 = [str(today - timedelta(days=i)) for i in range(config.SALES_DAYS, 0, -1)]
-    d7 = str(today - timedelta(days=7))
+    days14 = [str(today - timedelta(days=i)) for i in range(config.SALES_DAYS - 1, -1, -1)]   # 14 дней вместе с сегодняшним
+    d7 = str(today - timedelta(days=6))
     daily, opt = defaultdict(lambda: defaultdict(int)), defaultdict(list)
     for day, offer, _wh, qty in rows:
         if qty >= config.WHOLESALE_MIN:
@@ -246,9 +247,10 @@ def build(snap, overrides=None):
         {r["warehouse"] for r in snap.wh_stocks if config.foreign(r.get("cluster"))}
 
     # --- спрос по складам ---
-    d14, d30 = str(today - timedelta(days=config.SALES_DAYS)), str(today - timedelta(days=config.REF_DAYS))
+    # 14 дней вместе с сегодняшним (09.11.2026, решение владельца: «беру продажи и того дня, в который считаю»)
+    d14, d30 = str(today - timedelta(days=config.SALES_DAYS - 1)), str(today - timedelta(days=config.REF_DAYS - 1))
     rows = [(day, norm(offer), wh, qty) for day, offer, _sku, wh, qty in snap.postings
-            if day < str(today) and wh and wh not in foreign_wh]
+            if day <= str(today) and wh and wh not in foreign_wh]
     cut, demand = demand_spikes(rows, today)
     s14, s30 = defaultdict(float), defaultdict(int)
     wh_sales30 = defaultdict(int)
@@ -558,10 +560,11 @@ def build(snap, overrides=None):
                 ln.flags.append(f"не везём сейчас: нужно {raw}, а самый маленький короб {smin} шт; запас {ln.have / d0:.0f} дн "
                                 f"— довезти полным коробом в следующую отгрузку, к ней запас ~{max(0, ln.have / d0 - gap):.0f} дн")
                 ln.later = raw
+                ln.boxbig = smin
                 ln.qty, ln.boxes = 0, []
                 continue
             q, box = smin, smin
-        later_days = config.FAST_LATER_DAYS if ln.cluster in config.FAST_CLUSTERS else config.TRIGGER_DAYS
+        later_days = config.FAST_LATER_DAYS if ln.cluster in config.FAST_CLUSTERS else config.trigger_days(0, ln.cluster)
         if d0 and ln.have > 0 and ln.have / d0 >= later_days and raw < config.MIN_SHIP and q - raw >= 5:
             # запас от 30 дн, а до цели не хватает меньше минимальной партии — сейчас не везём, довезём в следующую
             # отгрузку (решение владельца 09.11.2026: OZ479-X96WHITE100W нужно 4 → было 30, OZ435-2USBNEW 24 → 30)
@@ -588,9 +591,14 @@ def build(snap, overrides=None):
         if d0 and ln.have > 0 and (ln.have + q) / d0 > config.SKIP_AFTER_DAYS:
             ln.flags.append(f"не везём: нужно {raw}, но {q} шт дали бы запас {(ln.have + q) / d0:.0f} дн "
                             f"(больше {config.SKIP_AFTER_DAYS})")
+            if smin and raw < smin:   # короб из квантов больше потребности — бежевым, проверить коробку (09.11.2026)
+                ln.boxbig = smin
             ln.qty, ln.boxes = 0, []
             continue
         ln.qty = q
+        if smin and raw < smin and q % smin:   # везём не целый короб из квантов — бежевым (09.11.2026)
+            ln.boxbig = smin
+            ln.flags.append(f"короб в квантах от {smin} шт, везём {q} — проверьте, есть ли такой короб")
         small = min((sz for _, sz in sizes), default=0)
         fit = max((sz for _, sz in sizes if sz and q % sz == 0), default=0)
         if box:

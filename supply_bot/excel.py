@@ -18,6 +18,11 @@ TRY_FILL = PatternFill("solid", fgColor="E2EFDA")     # светло-зелён�
 def _later(plan, wh):
     return [z["line"] for z in plan.zero if z.get("line") is not None and z["line"].later and z["warehouse"] == wh]
 STOP_FONT = Font(color="808080")
+BOX_FILL = PatternFill("solid", fgColor="E7D7C1")   # бежевый: короб из квантов больше потребности — проверить коробку (09.11.2026)
+
+
+def _later_fill(ln):
+    return BOX_FILL if ln.boxbig else LATER_FILL
 DEMAND_FILL = {"опт": PatternFill("solid", fgColor="FFD8A8"), "всплеск": PatternFill("solid", fgColor="FFD8A8"),
                "рост": PatternFill("solid", fgColor="C6EFCE")}   # опт и всплеск — оранжевый, рост спроса — зелёный
 WARN_FILL = {"платное": PatternFill("solid", fgColor="FFC7CE"),   # платное хранение — красный
@@ -28,6 +33,10 @@ WARN_FILL = {"платное": PatternFill("solid", fgColor="FFC7CE"),   # пл�
 
 def _fill(ln, partial=False):
     """Цвет строки: платное > выкуп > большой запас (оранжевый) > неполный короб > опт/всплеск/рост."""
+    if ln.warn == "платное":
+        return WARN_FILL[ln.warn]
+    if ln.boxbig:
+        return BOX_FILL
     if ln.warn:
         return WARN_FILL[ln.warn]
     if partial:
@@ -93,7 +102,7 @@ def _distribution(wb, plan, groups):
         for ln in _later(plan, wh):   # голубым под итогом: сейчас не везём, довезти в следующую отгрузку
             ws.append([wh, ln.cluster, "", ln.offer, f"({ln.later})", "—", None, None, "след. отгрузка",
                        next((f for f in ln.flags if f.startswith("не везём сейчас")), "")])
-            _paint(ws, LATER_FILL)
+            _paint(ws, _later_fill(ln))
     for c in ws["H"][1:]:
         c.number_format = "DD.MM.YYYY"
 
@@ -134,7 +143,7 @@ def _order_sheet(wb, plan, lines):
                        inf.get("free"), inf.get("root"), (inf.get("status") or "").capitalize(), None,
                        round(ln.days) if ln.days is not None else None,
                        next((f for f in ln.flags if f.startswith("не везём сейчас")), "")])
-            _paint(ws, LATER_FILL)
+            _paint(ws, _later_fill(ln))
     for wh in sorted({x.warehouse for x in lines}):   # в самом низу: нет в кластере — можно попробовать, решает владелец
         for x in plan.try_list.get(wh, []):
             ws.append([wh, x["offer"], None, 0, None, None, None, 0, x["free"], None, (x["status"] or "").capitalize(),
@@ -175,7 +184,7 @@ def _zero_sheet(wb, plan, directions=None):
                        inf.get("free"), inf.get("root"), (z["status"] or "").capitalize(),
                        z["days"], z["why"]])
             if ln.later:
-                _paint(ws, LATER_FILL)
+                _paint(ws, _later_fill(ln))
         else:
             sp = z["sales14"] / config.SALES_DAYS
             ws.append([z["warehouse"], z["offer"], z["category"], 0, None, z["transit"], z["sales14"], z["available"],

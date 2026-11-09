@@ -5,7 +5,7 @@ from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("SUPPLY_BOT_DATA", Path(__file__).parent / "data"))
 
-SALES_DAYS = 14          # спрос = отгрузки FBO за 14 полных дней ÷ 14
+SALES_DAYS = 14          # спрос = отгрузки FBO за 14 дней вместе с сегодняшним ÷ 14 (09.11.2026, как считает владелец)
 REF_DAYS = 30            # продажи за 30 дней — справочно и для выбора обязательных складов
 # Логика владельца (02.11.2026, выведена из её ручных расчётов по 7 кластерам, заменяет формулу «×2,5»):
 # запас на Ozon от 30 дней — не везём; меньше — довозим до 40 дн (хит, от 40 шт за 14 дн), 45 дн (20–39 шт), 50 дн (меньше 20).
@@ -18,6 +18,9 @@ MOSCOW_TRIGGER_HIT, MOSCOW_TRIGGER_OTHER = 37, 25
 # короб больше потребности не берём — круглое число; мало нужно при запасе от 25 дн — «довезти в чт».
 SPB_CLUSTER = "Санкт-Петербург и СЗО"
 FAST_CLUSTERS = {MOSCOW_CLUSTER, SPB_CLUSTER}
+# Дальние кластеры (09.11.2026, Новосибирск: OZ446-AC6 при 37 дн владелец везёт — сборка и дорога): не везём от 35 дн
+FAR_CLUSTERS = {"Новосибирск", "Омск", "Красноярск", "Дальний Восток"}
+FAR_TRIGGER = 35
 FAST_TRIGGER_OTHER = 27
 TARGET_FAST = 35
 FAST_LATER_DAYS = 25
@@ -128,6 +131,8 @@ def trigger_days(sales14, cluster=None):
         return HIT_TRIGGER
     if cluster == SPB_CLUSTER:
         return FAST_TRIGGER_OTHER
+    if cluster in FAR_CLUSTERS:
+        return FAR_TRIGGER
     return TRIGGER_DAYS
 
 

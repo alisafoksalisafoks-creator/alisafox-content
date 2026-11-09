@@ -21,7 +21,7 @@ def postings(oz, today, days=config.REF_DAYS, log=print):
     cache = config.DATA_DIR / "postings"
     cache.mkdir(parents=True, exist_ok=True)
     rows = []
-    for i in range(days, 0, -1):
+    for i in range(days, -1, -1):   # с 09.11.2026 и сегодняшний день (i = 0), он всегда скачивается заново
         day = today - timedelta(days=i)
         path = cache / f"{day}.json"
         if path.exists() and i > REFRESH_LAST_DAYS:
