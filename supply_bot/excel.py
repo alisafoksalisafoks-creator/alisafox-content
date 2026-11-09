@@ -11,7 +11,8 @@ HEAD = PatternFill("solid", fgColor="DDE7F0")
 TOTAL = PatternFill("solid", fgColor="F2F2F2")
 PARTIAL_FILL = PatternFill("solid", fgColor="FFF2A8")
 STOP_FILL = PatternFill("solid", fgColor="EDEDED")
-LATER_FILL = PatternFill("solid", fgColor="DDEBF7")   # голубой: запас от 30 дн, нужно меньше партии — довезти в след. отгрузку
+LATER_FILL = PatternFill("solid", fgColor="DDEBF7")
+TRY_FILL = PatternFill("solid", fgColor="E2EFDA")     # светло-зелёный: нет в кластере, есть у нас — можно попробовать (09.11.2026)   # голубой: запас от 30 дн, нужно меньше партии — довезти в след. отгрузку
 
 
 def _later(plan, wh):
@@ -134,6 +135,12 @@ def _order_sheet(wb, plan, lines):
                        round(ln.days) if ln.days is not None else None,
                        next((f for f in ln.flags if f.startswith("не везём сейчас")), "")])
             _paint(ws, LATER_FILL)
+    for wh in sorted({x.warehouse for x in lines}):   # в самом низу: нет в кластере — можно попробовать, решает владелец
+        for x in plan.try_list.get(wh, []):
+            ws.append([wh, x["offer"], None, 0, None, None, None, 0, x["free"], None, (x["status"] or "").capitalize(),
+                       None, None, f"нет в кластере — можно попробовать: ждём ~{x['est']:.0f} шт за 14 дн "
+                                   f"(по магазину {x['shop14']} шт), у нас {x['free']} шт"])
+            _paint(ws, TRY_FILL)
     ws.append(["Итого", f"{len(lines)} арт.", None, sum(x.qty for x in lines)])
     for c in ws[ws.max_row]:
         c.font = BOLD
@@ -236,7 +243,6 @@ def build_direction(plan, name, path, snap_time=""):
     _order_sheet(wb, plan, lines)
     _zero_sheet(wb, plan, {name})
     _later_sheet(wb, plan, {name})
-    _try_sheet(wb, plan, {name})
     _sheet(wb, "Параметры", ["Параметр", "Значение"], [
         ["Направление", name],
         ["Снимок данных", snap_time],
@@ -258,7 +264,6 @@ def build(plan, path, snap_time=""):
     _order_sheet(wb, plan, [x for x in plan.lines if x.qty > 0])
     _zero_sheet(wb, plan)
     _later_sheet(wb, plan)
-    _try_sheet(wb, plan)
 
     _sheet(wb, "Пустые кластеры",
            ["Кластер", "Артикул", "Продажи 14 дн (весь Ozon)", "Рекомендуемый склад", "Свободно у нас"],
