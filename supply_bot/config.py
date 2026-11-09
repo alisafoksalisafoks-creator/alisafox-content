@@ -13,12 +13,19 @@ TRIGGER_DAYS = 30        # запас на Ozon (остаток + в пути) �
 # Москва (05.11.2026): отгрузка 2 раза в неделю (пн и чт). Хиты везём до запаса 37 дн, остальное — при запасе меньше 25 дн
 MOSCOW_CLUSTER = "Москва, МО и Дальние регионы"
 MOSCOW_TRIGGER_HIT, MOSCOW_TRIGGER_OTHER = 37, 25
+# Москва и СПб (09.11.2026): обе ездят пн/чт. Не хиты при запасе от 27 дн не везём; довозим до 35 дн (хиты в Москве — до 40);
+# короб больше потребности не берём — круглое число; мало нужно при запасе от 25 дн — «довезти в чт».
+SPB_CLUSTER = "Санкт-Петербург и СЗО"
+FAST_CLUSTERS = {MOSCOW_CLUSTER, SPB_CLUSTER}
+FAST_TRIGGER_OTHER = 27
+TARGET_FAST = 35
+FAST_LATER_DAYS = 25
 HIT_SALES14 = 40         # хит — от 40 шт за 14 дней в кластере
 TARGET_HIT, TARGET_MID, TARGET_SLOW = 40, 45, 50
 MID_SALES14 = 20
 MIN_SHIP = 30            # меньше 30 шт в кластер не возим
 # запас от 30 дн и не хватает меньше партии — не везём, довезём в следующую отгрузку (09.11.2026)
-MOSCOW_NEXT_GAP, NEXT_SHIP_GAP = 4, 7   # дней до следующей отгрузки: Москва пн/чт, остальные раз в неделю
+MOSCOW_NEXT_GAP, NEXT_SHIP_GAP = 4, 7   # дней до следующей отгрузки: Москва и СПб пн/чт, остальные раз в неделю
 BOX_NEAR = 0.25          # короб из квантов в пределах 25% от нужного — везём ровно короб
 SLOW_MAX_DAYS = 60       # после поставки запаса больше 60 дней — оранжевая подсветка, решает владелец
 # склады Ozon, которые не работают: остаток там не считаем, поставки туда — потерянные, туда не везём
@@ -98,8 +105,13 @@ BOX_NAMES = ("61×40×33", "43×29×35", "40×30×30", "31×23×19,5", "штат
 MS_STORE = os.environ.get("MS_STORE", "1. Основной склад")
 
 
-def target_days(sales14):
-    """Сколько дней запаса держать после поставки: хиты 40, средние 45, медленные 50 (решение владельца 02.11.2026)."""
+def target_days(sales14, cluster=None):
+    """Сколько дней запаса держать после поставки: хиты 40, средние 45, медленные 50 (решение владельца 02.11.2026).
+    Москва и СПб — 35 дн; хиты в Москве — 40 (09.11.2026: так ближе всего к её ручной поставке в Москву)."""
+    if cluster == MOSCOW_CLUSTER and sales14 >= HIT_SALES14:
+        return TARGET_HIT
+    if cluster in FAST_CLUSTERS:
+        return TARGET_FAST
     if sales14 >= HIT_SALES14:
         return TARGET_HIT
     return TARGET_MID if sales14 >= MID_SALES14 else TARGET_SLOW
@@ -107,8 +119,14 @@ def target_days(sales14):
 
 def trigger_days(sales14, cluster=None):
     if cluster == MOSCOW_CLUSTER:
-        return MOSCOW_TRIGGER_HIT if sales14 >= HIT_SALES14 else MOSCOW_TRIGGER_OTHER
+        return MOSCOW_TRIGGER_HIT if sales14 >= HIT_SALES14 else FAST_TRIGGER_OTHER
+    if cluster == SPB_CLUSTER:
+        return TRIGGER_DAYS if sales14 >= HIT_SALES14 else FAST_TRIGGER_OTHER
     return TRIGGER_DAYS
+
+
+def next_gap(cluster):
+    return MOSCOW_NEXT_GAP if cluster in FAST_CLUSTERS else NEXT_SHIP_GAP
 
 
 def need(sales14, have, k=None, cluster=None, partial=False):
@@ -120,26 +138,31 @@ def need(sales14, have, k=None, cluster=None, partial=False):
     speed = sales14 / SALES_DAYS
     if have / speed >= trigger_days(sales14, cluster):
         return 0
-    target = TARGET_PARTIAL if partial else target_days(sales14)
+    target = TARGET_PARTIAL if partial else target_days(sales14, cluster)
     return max(0, math.ceil(target * speed - have))
 
 
 BOX_DOWN = 0.35   # короб меньше расчёта — до 35% (05.11.2026)
 
 
-def round_qty(qty, sizes):
-    """Округление по логике владельца: короб из квантов в пределах 25% — ровно короб; иначе до 100 шт — до 10,
+def round_qty(qty, sizes, no_up=False):
+    """no_up (Москва, СПб — 09.11.2026): короб больше потребности не берём, круглое число не выше потребности + 5 шт.
+
+    Округление по логике владельца: короб из квантов в пределах 25% — ровно короб; иначе до 100 шт — до 10,
     больше — до 50; не меньше 30 шт. Возвращает (шт, размер короба или None)."""
     if qty <= 0:
         return 0, None
     # короб чуть меньше расчёта можно смелее (до 35%): отгрузка 2 раза в неделю, довезём (решение владельца 05.11.2026)
+    if no_up:
+        sizes = [s for s in sizes if s <= qty + 5 or s < MIN_SHIP]
     near = [s for s in sizes if s > 0 and (abs(s - qty) <= max(5, BOX_NEAR * qty)
                                            or (s < qty and qty - s <= BOX_DOWN * qty and s >= 20))]
     if near:
         best = min(near, key=lambda s: (abs(s - qty), -s))
         return best, best
     # несколько одинаковых коробов в пределах 25% — берём самый большой короб (05.11.2026: MD60 81 → 2×50, а не 8×10)
-    multi = [(k * s, s) for s in sizes if s > 0 for k in range(2, 11) if abs(k * s - qty) < BOX_NEAR * qty]
+    multi = [(k * s, s) for s in sizes if s > 0 for k in range(2, 11) if abs(k * s - qty) < BOX_NEAR * qty
+             and (not no_up or k * s <= qty + 5)]
     if multi:
         q, s = max(multi, key=lambda t: (t[1], -abs(t[0] - qty)))
         return max(q, MIN_SHIP) if q >= MIN_SHIP else q, s
@@ -151,6 +174,10 @@ def round_qty(qty, sizes):
         q = int(round(qty / 10.0) * 10)
     else:
         q = int(round(qty / 50.0) * 50)
+        if no_up and q > qty + 5:
+            q -= 50
+    if no_up and qty <= 100 and q > qty + 5:
+        q -= 10
     return max(MIN_SHIP, q), None
 
 

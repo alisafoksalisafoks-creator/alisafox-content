@@ -529,7 +529,8 @@ def build(snap, overrides=None):
             continue
         # логика владельца (02.11.2026): короб рядом — ровно короб; иначе круглое число, не меньше 30 шт
         raw = ln.qty
-        q, box = config.round_qty(raw, [sz for _, sz in sizes])
+        no_up = ln.cluster in config.FAST_CLUSTERS
+        q, box = config.round_qty(raw, [sz for _, sz in sizes], no_up)
         bigger = sorted(sz for _, sz in sizes if sz >= raw)
         d_full = ln.eff14 / config.SALES_DAYS if ln.sales14 else ln.speed
         # на Ozon 0 — ближайший полный короб (02.11.2026), но не больше 80 дн запаса (05.11.2026: OZ386BLACK 100 шт)
@@ -540,17 +541,18 @@ def build(snap, overrides=None):
                             f"{config.SKIP_AFTER_DAYS}) — везём минимум")
         if ln.absent and ln.speed:
             if q / ln.speed > config.SKIP_AFTER_DAYS:   # полный короб слишком велик — пробуем круглое число
-                q, box = config.round_qty(raw, [sz for _, sz in sizes])
+                q, box = config.round_qty(raw, [sz for _, sz in sizes], no_up)
             if q / ln.speed > config.SKIP_AFTER_DAYS:
                 ln.flags.append(f"не везём: {q} шт хватит на {q / ln.speed:.0f} дн по оценке "
                                 f"(больше {config.SKIP_AFTER_DAYS})")
                 ln.qty, ln.boxes = 0, []
                 continue
         d0 = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
-        if d0 and ln.have > 0 and ln.have / d0 >= config.TRIGGER_DAYS and raw < config.MIN_SHIP and q - raw >= 5:
+        later_days = config.FAST_LATER_DAYS if ln.cluster in config.FAST_CLUSTERS else config.TRIGGER_DAYS
+        if d0 and ln.have > 0 and ln.have / d0 >= later_days and raw < config.MIN_SHIP and q - raw >= 5:
             # запас от 30 дн, а до цели не хватает меньше минимальной партии — сейчас не везём, довезём в следующую
             # отгрузку (решение владельца 09.11.2026: OZ479-X96WHITE100W нужно 4 → было 30, OZ435-2USBNEW 24 → 30)
-            gap = config.MOSCOW_NEXT_GAP if ln.cluster == config.MOSCOW_CLUSTER else config.NEXT_SHIP_GAP
+            gap = config.next_gap(ln.cluster)
             ln.flags.append(f"не везём сейчас: запас {ln.have / d0:.0f} дн, до цели не хватает {raw} шт — меньше партии "
                             f"{q} шт; довезти в следующую отгрузку ({'пн/чт' if gap < 7 else 'через неделю'}), "
                             f"к ней запас ~{max(0, ln.have / d0 - gap):.0f} дн")
@@ -579,7 +581,7 @@ def build(snap, overrides=None):
             ln.boxes = []
         d = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
         ln.flags.append((f"скорость по выкупу {ln.bf:.0%}: {ln.eff14:.0f} из {ln.sales14} шт за 14 дн; " if ln.bf < 1 else "")
-                        + f"запас {ln.have / d:.0f} дн → везём до {config.TARGET_PARTIAL if ln.partial else config.target_days(ln.eff14)} дн"
+                        + f"запас {ln.have / d:.0f} дн → везём до {config.TARGET_PARTIAL if ln.partial else config.target_days(ln.eff14, ln.cluster)} дн"
                         + (" («частично грузим»)" if ln.partial else "") + f": нужно {raw}, везём {q}"
                         + (f" (ровно {'короб' if q == box else f'{q // box} короба по'} {box})" if box else "") if d else f"нужно {raw}, везём {q}")
         if not sizes:

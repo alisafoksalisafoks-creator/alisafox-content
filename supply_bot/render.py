@@ -110,7 +110,7 @@ def warehouse(plan, name):
         part = WARN_ICON.get(ln.warn, "") + part + DEMAND_ICON.get(ln.demand, "")
         rows.append(f"{ICON[ln.priority]} {part}<code>{escape(ln.offer)}</code> — <b>{fmt(ln.qty)}</b> шт ({_boxes(ln)}) · "
                     f"{ln.speed:.1f}/дн, запас {days}{flag}\n"
-                    f"   {ln.sales14} шт за 14 дн, на Ozon {fmt(ln.have)} → до {config.target_days(ln.sales14)} дн нужно "
+                    f"   {ln.sales14} шт за 14 дн, на Ozon {fmt(ln.have)} → до {config.target_days(ln.sales14, ln.cluster)} дн нужно "
                     f"{fmt(ln.need)} → везём {fmt(ln.qty)}"
                     + ("" if ln.qty == ln.need else " (округление, в пределах нашего склада)"))
     return chunks(head + rows + stop)
