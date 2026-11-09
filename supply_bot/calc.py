@@ -612,8 +612,8 @@ def build(snap, overrides=None):
             if ln.qty and before is not None and before >= config.TRIGGER_DAYS and not ln.warn:
                 # Москва: хит с запасом 30–37 дн — можно и подождать до следующей отгрузки (пн/чт), решает владелец
                 ln.warn = "ждать"
-                ln.flags.append(f"запас {before:.0f} дн (30–{config.MOSCOW_TRIGGER_HIT}): хит в Москве — "
-                                "можно везти сейчас или в следующую отгрузку (пн/чт), решите")
+                ln.flags.append(f"запас {before:.0f} дн (30–{config.trigger_days(ln.eff14, ln.cluster)}): хит — "
+                                "можно везти сейчас или в следующую отгрузку, решите")
             if ln.qty and after and after > config.SLOW_MAX_DAYS:
                 small = min((sz for _, sz in _sizes(norm(ln.offer), ln.root, snap.boxes)), default=None)
                 if not ln.warn:

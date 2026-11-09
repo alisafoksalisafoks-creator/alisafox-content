@@ -97,7 +97,7 @@ def warehouse(plan, name):
             f"{fmt(sum(x.qty for x in items))} шт, {sum(x.box_count for x in items)} коробов, отгрузка {plan.ship_date:%d.%m}",
             "",
             "<b>Как считаю</b> (ваша логика): запас = (доступно на Ozon + в пути) ÷ продажи кластера за 14 дн × 14. "
-            f"Запас от {config.TRIGGER_DAYS} дн — не везём. Меньше — довозим до {config.TARGET_HIT} дн (хит, от {config.HIT_SALES14} шт за 14 дн), "
+            f"Запас от {config.TRIGGER_DAYS} дн — не везём (хиты — от {config.HIT_TRIGGER} дн). Меньше — довозим до {config.TARGET_HIT} дн (хит, от {config.HIT_SALES14} шт за 14 дн), "
             f"{config.TARGET_MID} дн (20–39 шт) или {config.TARGET_SLOW} дн (медленные). "
             "Опт (заказ от 10 шт) в спрос не беру, разовый всплеск считаю как обычный день — 🟧; всплески чаще раза в неделю — 📈 спрос растёт. "
             f"Округление: короб из квантов рядом (±25%) — ровно короб, иначе до 10 шт (больше 100 — до 50), минимум {config.MIN_SHIP} шт. "

@@ -9,6 +9,7 @@ SALES_DAYS = 14          # спрос = отгрузки FBO за 14 полны�
 REF_DAYS = 30            # продажи за 30 дней — справочно и для выбора обязательных складов
 # Логика владельца (02.11.2026, выведена из её ручных расчётов по 7 кластерам, заменяет формулу «×2,5»):
 # запас на Ozon от 30 дней — не везём; меньше — довозим до 40 дн (хит, от 40 шт за 14 дн), 45 дн (20–39 шт), 50 дн (меньше 20).
+HIT_TRIGGER = 35         # хит (от 40 шт за 14 дн) везём, пока запас меньше 35 дн; в Москве — 37 (09.11.2026)
 TRIGGER_DAYS = 30        # запас на Ozon (остаток + в пути) от 30 дней по продажам 14 дн — не везём
 # Москва (05.11.2026): отгрузка 2 раза в неделю (пн и чт). Хиты везём до запаса 37 дн, остальное — при запасе меньше 25 дн
 MOSCOW_CLUSTER = "Москва, МО и Дальние регионы"
@@ -120,8 +121,10 @@ def target_days(sales14, cluster=None):
 def trigger_days(sales14, cluster=None):
     if cluster == MOSCOW_CLUSTER:
         return MOSCOW_TRIGGER_HIT if sales14 >= HIT_SALES14 else FAST_TRIGGER_OTHER
+    if sales14 >= HIT_SALES14:   # хиты во всех кластерах — до 35 дн, чтобы не терять продажи (09.11.2026: OZ299NEW Ростов)
+        return HIT_TRIGGER
     if cluster == SPB_CLUSTER:
-        return TRIGGER_DAYS if sales14 >= HIT_SALES14 else FAST_TRIGGER_OTHER
+        return FAST_TRIGGER_OTHER
     return TRIGGER_DAYS
 
 
