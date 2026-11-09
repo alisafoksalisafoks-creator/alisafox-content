@@ -75,7 +75,7 @@ def full(uid):
 def menu(uid=0):
     rows = [[KeyboardButton(text=DATE_BTN), KeyboardButton(text=PERSONAL_BTN)],
             ([KeyboardButton(text=INPUT_BTN)] if ai.client else []) + [KeyboardButton(text=COMPANY_BTN)],
-            [KeyboardButton(text=OVERDUE_BTN), KeyboardButton(text=WEEK_BTN)],
+            [KeyboardButton(text=WEEK_BTN)],
             [KeyboardButton(text=CHAT_BTN), KeyboardButton(text=NEWS_BTN)]]
     if uid == OWNER:
         rows.append([KeyboardButton(text=ACCESS_BTN)])
@@ -101,7 +101,7 @@ def kb(rows, home=True):
 def start_kb(uid):
     return kb([[(DATE_BTN, "pick"), (PERSONAL_BTN, "me")],
                ([(INPUT_BTN, "in")] if ai.client else []) + [(COMPANY_BTN, f"co:{today()}")],
-               [(CHAT_BTN, "wch"), (OVERDUE_BTN, "od")],
+               [(CHAT_BTN, "wch")],
                [(WEEK_BTN, "wkm"), (NEWS_BTN, "nw")],
                [(ACCESS_BTN, "acc:list")] if uid == OWNER else []], home=False)
 
