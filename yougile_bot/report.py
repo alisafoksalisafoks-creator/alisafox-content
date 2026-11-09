@@ -351,3 +351,94 @@ def pf_digest(entries):
         return ""
     return "План/факт дня, написанный самим сотрудником:\n" + "\n---\n".join(
         clean_lines(t, 800) for _, t, _ in entries)
+
+
+# --- выжимка дня без нейросети: собирается по правилам ---
+
+ITEM_RE = re.compile(r"^\s*(\d+[.)]|[-•*–—]|[✅✔⬜☑❌🔴🟢])\s*")
+
+
+def pf_counts(entries):
+    """Сколько пунктов в плане и сколько отмечено ✅. Пункт — строка-список: «1)», «-», «•», «✅»."""
+    if not entries:
+        return 0, 0
+    first = [x for x in entries[0][1].splitlines() if x.strip()]
+    items = [x for x in first if ITEM_RE.match(x) or "✅" in x] or first[1:]
+    last = entries[-1][1] if len(entries) > 1 else entries[0][1]
+    done = sum(1 for x in last.splitlines() if "✅" in x or "✔" in x)
+    return len(items), done
+
+
+def summary(name, d, groups, tasks_by_id, column_title, plan_items, pf_entries, pf_has_task, board, now, tz):
+    """Короткая выжимка: что сделано, что в работе, переписка, план/факт, состояние доски, на что смотреть.
+    board — открытые задачи сотрудника (его доска и где он исполнитель)."""
+    e = html.escape
+    out = [f"📝 <b>{e(name)}</b> · {day_title(d)}"]
+    done, moved, created, talk = [], [], [], []
+    for g in groups.values():
+        t = tasks_by_id.get(g.get("task_id") or "")
+        kinds = [i[1] for i in g["items"]]
+        n_msg = kinds.count("message")
+        if g.get("chat_id") and not g.get("task_id"):
+            talk.append((n_msg, "чат"))
+            continue
+        title = clean(t.get("title"), 45) if t else "удалённая задача"
+        if "done" in kinds:
+            done.append(title)
+        elif "move" in kinds:
+            to = [i[2].get("to") for i in g["items"] if i[1] == "move"][-1]
+            moved.append(f"{title} → {column_title(to)}")
+        if "add" in kinds and "done" not in kinds:
+            created.append(title)
+        if n_msg:
+            talk.append((n_msg, title))
+    acts = count(groups)
+    if not acts and not pf_entries:
+        out.append("За день действий в YouGile нет.")
+
+    def few(items, k=3):
+        items = list(dict.fromkeys(items))
+        return "; ".join(e(x) for x in items[:k]) + (f" и ещё {len(items) - k}" if len(items) > k else "")
+
+    if done:
+        out.append(f"✅ <b>Сделано ({len(set(done))}):</b> {few(done)}")
+    if moved:
+        out.append(f"➡️ <b>Двигал:</b> {few(moved, 2)}")
+    if created:
+        out.append(f"➕ <b>Новые задачи ({len(set(created))}):</b> {few(created, 2)}")
+    if talk:
+        total = sum(n for n, _ in talk)
+        top = max(talk, key=lambda x: x[0])
+        where_ = "в групповом чате" if top[1] == "чат" else f"«{e(top[1])}»"
+        out.append(f"💬 <b>Переписка:</b> {total} сообщ. в {len(talk)} чатах, больше всего — {where_}")
+    # план/факт дня
+    if not pf_has_task:
+        out.append("📝 <b>План/факт:</b> задачи «ПЛАН/ФАКТ ДНЯ» нет")
+    else:
+        p, r = pf_status(pf_entries, tz)
+        items, ok = pf_counts(pf_entries)
+        if not p:
+            out.append("📝 <b>План/факт:</b> не написан ⬜️")
+        else:
+            nums = f", пунктов {items}, отмечено ✅ {ok}" if items else ""
+            out.append(f"📝 <b>План/факт:</b> план ✅ отчёт {'✅' if r else '⬜️'}{nums}")
+    # сроки дня
+    if plan_items:
+        closed = sum(1 for _, s in plan_items if s == "done")
+        out.append(f"🗓 <b>Сроки на день:</b> закрыто {closed} из {len(plan_items)}")
+    # доска
+    late = [t for t in board if 0 < ((t.get("deadline") or {}).get("deadline") or 0) < now]
+    if board:
+        out.append(f"📋 <b>На доске:</b> открыто {len(board)}, просрочено {len(late)}")
+    # внимание
+    warn = []
+    if late:
+        warn.append("просрочены: " + few([clean(t.get("title"), 40) for t in late], 2))
+    left = [clean(t.get("title"), 40) for t, s in plan_items if s != "done"]
+    if left:
+        warn.append("не закрыто в срок: " + few(left, 2))
+    if pf_has_task and not all(pf_status(pf_entries, tz)):
+        warn.append("нет " + ("плана" if not pf_entries else "вечернего отчёта"))
+    if warn:
+        out.append("⚠️ <b>Внимание:</b> " + "; ".join(warn))
+    return "\n".join(out)

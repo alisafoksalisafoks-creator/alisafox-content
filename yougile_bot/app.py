@@ -525,7 +525,17 @@ async def employee_data(uid, d: date):
     head, sep, rest = detail.partition("\n\n")
     detail = head + "\n\n" + report.pf_block(pf, pf_titles, TZ) + (sep + rest if sep else "")
     facts = "\n".join(x for x in (report.pf_digest(pf), report.digest(rest_groups, by_id, column_title, chat, plan)) if x)
-    return {"name": name, "partial": partial, "groups": groups, "plan": plan, "pf": pf,
+    my_board = mapping().get(uid, {}).get("board")
+    board = [t for t in tasks if not t.get("deleted") and not t.get("archived") and not t.get("completed")
+             and t["id"] not in pf_ids
+             and (uid in (t.get("assigned") or [])
+                  or (my_board and (columns.get(t.get("columnId") or "") or {}).get("boardId") == my_board))]
+    now = int(datetime.now(TZ).timestamp() * 1000)
+    short = report.summary(name, d, rest_groups, by_id, column_title, plan, pf, bool(pf_titles), board,
+                           min(now, end), TZ)
+    if partial:
+        short += "\n<i>День раньше запуска бота — данные могут быть неполными.</i>"
+    return {"name": name, "partial": partial, "groups": groups, "plan": plan, "pf": pf, "short": short,
             "pf_mark": report.pf_mark(pf, TZ, bool(pf_titles)), "detail": detail, "facts": facts}
 
 
@@ -534,7 +544,7 @@ async def employee_report(uid, d: date):
 
 
 async def employee_brief(r, uid, d: date):
-    """Конспект за день от Claude. Без ключа или при ошибке — подробный разбор."""
+    """Конспект за день: от Claude, если есть ключ, иначе — выжимка по правилам."""
     n = report.count(r["groups"])
     head = f"📝 <b>{html.escape(r['name'])}</b> · {report.day_title(d)}"
     if not n and not r["plan"] and not r["pf"]:
@@ -543,7 +553,7 @@ async def employee_brief(r, uid, d: date):
     stat = (f"Действий: {n}" + (f" · сроки {done} из {len(r['plan'])}" if r["plan"] else "")
             + " · " + r["pf_mark"])
     if not ai.client:
-        return r["detail"]
+        return r["short"]
     key = ("e", d, uid, n, done, len(r["pf"]))
     if len(briefs) > 500:
         briefs.clear()
@@ -552,7 +562,7 @@ async def employee_brief(r, uid, d: date):
             briefs[key] = await ai.brief_employee(r["name"], report.day_title(d), r["facts"], r["partial"])
         except Exception:
             log.exception("конспект")
-            return r["detail"]
+            return r["short"]
     note = "\n\n<i>День раньше запуска бота — данные неполные.</i>" if r["partial"] else ""
     return f"{head}\n{stat}\n\n{html.escape(briefs[key])}{note}"
 
