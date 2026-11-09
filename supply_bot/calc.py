@@ -58,6 +58,7 @@ class Line:
     partial: bool = False     # статус «Частично грузим» — цель 35 дн
     bf: float = 1.0           # доля выкупа, если выкуп < 85%: скорость считаем по выкупам
     warn: str = ""            # «платное» (красный) или «выкуп» (сиреневый) — грузим, но подсвечиваем
+    later: int = 0            # сколько довезти в следующую отгрузку (запас от 30 дн, нужно меньше партии)
     absent: bool = False      # товара в кластере нет совсем — скорость оценена по другим кластерам
 
     @property
@@ -546,6 +547,16 @@ def build(snap, overrides=None):
                 ln.qty, ln.boxes = 0, []
                 continue
         d0 = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
+        if d0 and ln.have > 0 and ln.have / d0 >= config.TRIGGER_DAYS and raw < config.MIN_SHIP and q - raw >= 5:
+            # запас от 30 дн, а до цели не хватает меньше минимальной партии — сейчас не везём, довезём в следующую
+            # отгрузку (решение владельца 09.11.2026: OZ479-X96WHITE100W нужно 4 → было 30, OZ435-2USBNEW 24 → 30)
+            gap = config.MOSCOW_NEXT_GAP if ln.cluster == config.MOSCOW_CLUSTER else config.NEXT_SHIP_GAP
+            ln.flags.append(f"не везём сейчас: запас {ln.have / d0:.0f} дн, до цели не хватает {raw} шт — меньше партии "
+                            f"{q} шт; довезти в следующую отгрузку ({'пн/чт' if gap < 7 else 'через неделю'}), "
+                            f"к ней запас ~{max(0, ln.have / d0 - gap):.0f} дн")
+            ln.later = raw
+            ln.qty, ln.boxes = 0, []
+            continue
         if d0 and ln.have > 0 and ln.have / d0 >= config.ORANGE_WAIT_DAYS and (ln.have + q) / d0 > config.SLOW_MAX_DAYS:
             # оранжевая строка, а запаса ещё от 25 дн — ждём неделю, довезём больше (решение владельца 02.11.2026)
             ln.flags.append(f"не везём: запас {ln.have / d0:.0f} дн, а {q} шт дали бы {(ln.have + q) / d0:.0f} дн "

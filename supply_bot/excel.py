@@ -162,6 +162,22 @@ def _zero_sheet(wb, plan, directions=None):
         ws.column_dimensions[get_column_letter(i)].width = w
 
 
+def _later_sheet(wb, plan, directions=None):
+    """Лист «Довезти в след. отгрузку»: запас от 30 дн, а до цели не хватает меньше партии — сейчас не везём (09.11.2026)."""
+    rows = []
+    for z in plan.zero:
+        ln = z.get("line")
+        if ln is None or not ln.later or (directions is not None and z["warehouse"] not in directions):
+            continue
+        rows.append([z["warehouse"], ln.offer, z["days"], ln.later, ln.sales14, ln.available, ln.transit,
+                     (plan.info.get(ln.offer) or {}).get("free"), z["why"]])
+    if rows:
+        _sheet(wb, "Довезти в след. отгрузку",
+               ["Направление", "Артикул", "Дней запаса сейчас", "Не хватает до цели, шт", "Продано за 2 недели",
+                "Остатки Ozon", "Транзит", "Остатки наш склад", "Почему не сейчас"],
+               rows, [22, 26, 10, 11, 11, 10, 9, 11, 70])
+
+
 def _need(wb, lines, title="Потребность по направлениям"):
     """Весь расчёт по строкам: из чего получилась потребность и сколько везём."""
     ws = _sheet(wb, title,
@@ -187,6 +203,7 @@ def build_direction(plan, name, path, snap_time=""):
     _need(wb, lines, "Как посчитано")
     _order_sheet(wb, plan, lines)
     _zero_sheet(wb, plan, {name})
+    _later_sheet(wb, plan, {name})
     _sheet(wb, "Параметры", ["Параметр", "Значение"], [
         ["Направление", name],
         ["Снимок данных", snap_time],
@@ -207,6 +224,7 @@ def build(plan, path, snap_time=""):
     _need(wb, plan.lines)
     _order_sheet(wb, plan, [x for x in plan.lines if x.qty > 0])
     _zero_sheet(wb, plan)
+    _later_sheet(wb, plan)
 
     _sheet(wb, "Пустые кластеры",
            ["Кластер", "Артикул", "Продажи 14 дн (весь Ozon)", "Рекомендуемый склад", "Свободно у нас"],
