@@ -62,6 +62,7 @@ class Line:
     later: int = 0            # сколько довезти в следующую отгрузку (запас от 30 дн, нужно меньше партии)
     absent: bool = False      # товара в кластере нет совсем — скорость оценена по другим кластерам
     rich: int = 0             # у нас на складе товара на N дн продаж магазина (от 60) — раскидываем смелее (мятный)
+    oos: bool = False         # товар в кластере кончился — спрос по дням с остатком, цель 35 дн (10.11.2026)
     boxbig: int = 0           # самый маленький короб из квантов больше потребности — строка бежевая, проверить коробку
 
     @property
@@ -376,6 +377,23 @@ def build(snap, overrides=None):
         rec = stock_c.setdefault((offer, cluster_of.get(wh, "")), {"available": 0, "transit": 0})
         rec["available"] += st["available"]
         rec["transit"] += st["transit"]
+    # --- товар в кластере кончился: спрос считаем по дням, когда он был (решение владельца 10.11.2026,
+    #     Тверь: OZ214 продали 30 шт за 11–21.10, потом 0 на складе и 3 шт за 14 дн). Если сейчас в кластере
+    #     запаса меньше чем на неделю, а за 16 дн до этих 14 продавали заметно больше — берём ту скорость. ---
+    before = defaultdict(float)
+    for day, offer, wh, qty in rows:
+        if qty < config.WHOLESALE_MIN and wh in cluster_of and d30 <= day < d14:
+            before[(offer, cluster_of[wh])] += qty * cut.get((offer, day), 1)
+    oos = {}
+    nb = config.REF_DAYS - config.SALES_DAYS
+    for key, b in before.items():
+        st = stock_c.get(key) or {"available": 0, "transit": 0}
+        cur = s14c.get(key, 0)
+        est = b / nb * config.SALES_DAYS
+        if st["available"] + st["transit"] <= max(2, cur / config.SALES_DAYS * 7) and \
+                est >= max(cur * 1.5, cur + config.OOS_MIN_GAIN):
+            oos[key] = (cur, b, est)
+            s14c[key] = est
     # --- поставки, которые Ozon не принял больше STUCK_DAYS после слота: считаем потерянными (решение владельца 05.11.2026) ---
     stuck_cut = defaultdict(list)
     for sp in getattr(snap, "not_accepted", None) or []:
@@ -421,13 +439,19 @@ def build(snap, overrides=None):
         speed = s14c.get((offer, cl), 0) / config.SALES_DAYS * e["k"]
         lead = config.lead_days(cl)
         need = config.need(s14c.get((offer, cl), 0) * e["bf"], st["available"] + st["transit"], e["k"], cl,
-                           partial=e["u"].get("status") == "частично грузим")
+                           partial=e["u"].get("status") == "частично грузим" or (offer, cl) in oos)
         lines[(offer, cl)] = Line(
             offer=e["name"], root=e["u"]["root"], warehouse=cl, cluster=cl, ship_to=top_wh.get(cl, ""),
             sales14=round(s14c.get((offer, cl), 0)), sales30=s30c.get((offer, cl), 0), speed=speed,
             available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"], bf=e["bf"],
             partial=e["u"].get("status") == "частично грузим")
         lines[(offer, cl)].flags += stuck_cut.get((offer, cl), [])
+        if (offer, cl) in oos:
+            lines[(offer, cl)].oos = True
+            cur, b, est = oos[(offer, cl)]
+            lines[(offer, cl)].flags.append(
+                f"товар кончился: за 14 дн продано {cur:.0f} шт, а за {nb} дн до этого {b:.0f} шт — "
+                f"спрос считаем по дням с остатком: {est:.0f} шт за 14 дн, везём до 35 дн (спрос не проверен)")
         if e.get("warn"):
             lines[(offer, cl)].warn = e["warn"][0]
             lines[(offer, cl)].flags.append(e["warn"][1])
@@ -633,7 +657,7 @@ def build(snap, overrides=None):
             ln.boxes = []
         d = ln.eff14 / config.SALES_DAYS if ln.sales14 else 0
         ln.flags.append((f"скорость по выкупу {ln.bf:.0%}: {ln.eff14:.0f} из {ln.sales14} шт за 14 дн; " if ln.bf < 1 else "")
-                        + f"запас {ln.have / d:.0f} дн → везём до {config.TARGET_PARTIAL if ln.partial else config.target_days(ln.eff14, ln.cluster)} дн"
+                        + f"запас {ln.have / d:.0f} дн → везём до {config.TARGET_PARTIAL if ln.partial or ln.oos else config.target_days(ln.eff14, ln.cluster)} дн"
                         + (" («частично грузим»)" if ln.partial else "") + f": нужно {raw}, везём {q}"
                         + (f" (ровно {'короб' if q == box else f'{q // box} короба по'} {box})" if box else "") if d else f"нужно {raw}, везём {q}")
         if not sizes:
