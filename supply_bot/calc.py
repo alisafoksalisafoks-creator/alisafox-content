@@ -61,6 +61,7 @@ class Line:
     warn: str = ""            # «платное» (красный) или «выкуп» (сиреневый) — грузим, но подсвечиваем
     later: int = 0            # сколько довезти в следующую отгрузку (запас от 30 дн, нужно меньше партии)
     absent: bool = False      # товара в кластере нет совсем — скорость оценена по другим кластерам
+    trial: bool = False       # «нет в кластере» — проба 20–40 шт (оценка 5–10 шт за 14 дн, у нас товара много), 12.11.2026
     rich: int = 0             # у нас на складе товара на N дн продаж магазина (от 60) — раскидываем смелее (мятный)
     oos: bool = False         # товар в кластере кончился — спрос по дням с остатком, цель 35 дн (10.11.2026)
     boxbig: int = 0           # самый маленький короб из квантов больше потребности — строка бежевая, проверить коробку
@@ -155,6 +156,16 @@ def demand_spikes(rows, today):
         if not hot:
             continue
         what = ", ".join(f"{by_day[d]} шт {d[8:10]}.{d[5:7]}" for d in hot)
+        total = sum(by_day.get(d, 0) for d in days14)
+        extra = sum(by_day[d] - usual for d in hot)
+        if total and extra >= config.SPIKE_SHARE * total:
+            # 12.11.2026 (владелец «да»; OZ479-X96BLACK60WNEW Москва: 22 и 20 шт за 2 дня при обычных 0–5):
+            # всплески дают большую часть продаж — спрос считаем по обычным дням, всплеск срезаем до обычного дня
+            for d in hot:
+                cut[(offer, d)] = usual / by_day[d]
+            out[offer] = {"kind": "всплеск", "text": f"всплески {what} дали {extra / total:.0%} продаж за 14 дн при обычном "
+                                                     f"дне {usual:g} шт — спрос считаю по обычным дням"}
+            continue
         if sum(d >= d7 for d in hot) >= 2:
             out[offer] = {"kind": "рост", "text": f"спрос растёт: всплески {what} при обычном дне {usual:g} шт — "
                                                   "считаю по факту, проверьте, не пора ли поднять закупку"}
@@ -377,6 +388,25 @@ def build(snap, overrides=None):
         rec = stock_c.setdefault((offer, cluster_of.get(wh, "")), {"available": 0, "transit": 0})
         rec["available"] += st["available"]
         rec["transit"] += st["transit"]
+    # --- всплески внутри кластера (12.11.2026, владелец «да»; OZ479-X96BLACK60WNEW Москва: 22 и 20 шт за 2 дня при
+    #     обычных 0–5): если всплески дали от SPIKE_SHARE продаж кластера за 14 дн — спрос считаем по обычным дням ---
+    cl_daily = defaultdict(lambda: defaultdict(float))
+    for day, offer, wh, qty in rows:
+        if qty < config.WHOLESALE_MIN and wh in cluster_of and day >= d14:
+            cl_daily[(offer, cluster_of[wh])][day] += qty * cut.get((offer, day), 1)
+    days14 = [str(today - timedelta(days=i)) for i in range(config.SALES_DAYS - 1, -1, -1)]
+    cl_spike = {}
+    for key, by_day in cl_daily.items():
+        total = sum(by_day.values())
+        if total < config.SPIKE_CL_MIN14:
+            continue
+        usual = statistics.median(by_day.get(d, 0) for d in days14)
+        hot = [d for d in days14 if by_day.get(d, 0) >= max(config.SPIKE_CL_MIN_DAY, config.SPIKE_RATIO * max(usual, 1))]
+        extra = sum(by_day[d] - usual for d in hot)
+        # только 1–2 дня: если «всплесков» больше, это рост или новый товар (OZ573-DU70TC-TC Москва), не режем
+        if hot and len(hot) <= config.SPIKE_CL_MAX_DAYS and extra >= config.SPIKE_SHARE * total:
+            s14c[key] = total - extra
+            cl_spike[key] = ", ".join(f"{by_day[d]:.0f} шт {d[8:10]}.{d[5:7]}" for d in hot), extra / total, usual
     # --- товар в кластере кончился: спрос считаем по дням, когда он был (решение владельца 10.11.2026,
     #     Тверь: OZ214 продали 30 шт за 11–21.10, потом 0 на складе и 3 шт за 14 дн). Если сейчас в кластере
     #     запаса меньше чем на неделю, а за 16 дн до этих 14 продавали заметно больше — берём ту скорость. ---
@@ -446,6 +476,10 @@ def build(snap, overrides=None):
             available=st["available"], transit=st["transit"], lead=lead, need=need, season=e["k"], bf=e["bf"],
             partial=e["u"].get("status") == "частично грузим")
         lines[(offer, cl)].flags += stuck_cut.get((offer, cl), [])
+        if (offer, cl) in cl_spike:
+            what, share, usual = cl_spike[(offer, cl)]
+            lines[(offer, cl)].flags.append(f"в кластере всплески {what} дали {share:.0%} продаж за 14 дн при обычном дне "
+                                            f"{usual:g} шт — спрос считаю по обычным дням")
         if (offer, cl) in oos:
             lines[(offer, cl)].oos = True
             cur, b, est = oos[(offer, cl)]
@@ -459,16 +493,16 @@ def build(snap, overrides=None):
     # --- ходовой товар, которого в кластере нет совсем (ни остатка, ни продаж за 14 дн): довозим по оценке
     #     из продаж в других кластерах (решение владельца 05.11.2026). Оценка = продажи артикула за 14 дн ×
     #     доля кластера / доля кластеров, где артикул продавался. ---
+    profits_early = {norm(k): v for k, v in (getattr(snap, "profit", None) or {}).items()}
     cl_s14 = defaultdict(float)
     for (_o, cl), v in s14c.items():
         if cl:
             cl_s14[cl] += v
     shop14 = sum(cl_s14.values()) or 1
     all_cl = sorted(set(cluster_of.values()) - {""})
-    root_in = defaultdict(float)   # модель (корневой артикул) уже есть в кластере другой карточкой — не считаем «нет»
-    for (o, cl), st in stock_c.items():
-        if o in eligible:
-            root_in[(eligible[o]["u"]["root"], cl)] += st["available"] + st["transit"]
+    # модель (корневой артикул) в кластере покупают другой карточкой — не считаем «нет» (OZ299NEW3 → продаётся OZ299NEW).
+    # 12.11.2026: соседняя карточка без продаж (только остаток) больше не мешает — хит предлагаем (Тверь OZ435NEW, OZ446-AC6)
+    root_in = defaultdict(float)
     for (o, cl), v in s14c.items():
         if o in eligible:
             root_in[(eligible[o]["u"]["root"], cl)] += v
@@ -481,11 +515,20 @@ def build(snap, overrides=None):
             share = cl_s14.get(cl, 0) / shop14
             st = stock_c.get((offer, cl), zero)
             if share < config.EMPTY_CLUSTER_MIN_SHARE or s14c.get((offer, cl), 0) > 0 \
-                    or st["available"] + st["transit"] > 0 or not sold_share or root_in.get((e["u"]["root"], cl)):
+                    or st["available"] + st["transit"] > 0 or not sold_share \
+                    or root_in.get((e["u"]["root"], cl), 0) >= config.TWIN_MIN_SALES:
                 continue
             est = tot * share / sold_share
-            if est < config.ABSENT_MIN14:
+            ffd = e.get("ffdays", 0)
+            if ffd < config.ABSENT_FF_MIN_DAYS:   # у нас мало — отдаём кластерам, где товар уже продаётся (12.11.2026)
                 continue
+            trial = False
+            if est < config.ABSENT_MIN14:
+                # 12.11.2026 (владелец «да»): у нас много — проба 20–40 шт уже от ~5 шт за 14 дн (Тюмень OZ648–5X129)
+                pu = (profits_early.get(offer) or {}).get("per_unit")
+                if est < config.ABSENT_TRY_MIN14 or ffd < config.FF_RICH_DAYS or pu is None or pu < config.TRIAL_MIN_PROFIT:
+                    continue   # проба — только с нормальной маржой (OZ320NEW4 7 ₽, OZ449 3 ₽ не пробуем)
+                trial = True
             partial = e["u"].get("status") == "частично грузим"
             need = config.need(est, 0, e["k"], cl, partial=partial)
             ln = lines[(offer, cl)] = Line(
@@ -493,8 +536,10 @@ def build(snap, overrides=None):
                 sales14=0, sales30=s30c.get((offer, cl), 0), speed=est / config.SALES_DAYS * e["k"],
                 available=0, transit=0, lead=config.lead_days(cl), need=need, season=e["k"], bf=e["bf"],
                 partial=partial)
-            ln.flags.append(f"в кластере нет: по продажам в других кластерах ждём ~{est:.0f} шт за 14 дн (оценка)")
+            ln.flags.append(f"в кластере нет: по продажам в других кластерах ждём ~{est:.0f} шт за 14 дн (оценка)"
+                            + (" — проба, у нас товара много" if trial else ""))
             ln.absent = True
+            ln.trial = trial
             ln.priority = "наверх"
             if e.get("warn"):
                 ln.warn = e["warn"][0]
@@ -577,6 +622,14 @@ def build(snap, overrides=None):
         elif ln.have <= 0 and bigger and d_full:   # короб больше 80 дн — везём минимум, товар в кластере должен быть
             ln.flags.append(f"короб {bigger[0]} шт хватит на {bigger[0] / d_full:.0f} дн (больше "
                             f"{config.SKIP_AFTER_DAYS}) — везём минимум")
+        if ln.absent and ln.speed and ln.trial:
+            # проба: 20 шт или самый маленький короб до 40 шт, не больше 60 дн по оценке (12.11.2026)
+            fits = [sz for _, sz in sizes if sz and config.SMALL_LOT <= sz <= 40 and sz / ln.speed <= config.SLOW_MAX_DAYS]
+            q, box = (min(fits), min(fits)) if fits else (config.SMALL_LOT, None)
+            if q / ln.speed > config.SLOW_MAX_DAYS:
+                ln.flags.append(f"проба не нужна: {q} шт хватит на {q / ln.speed:.0f} дн по оценке")
+                ln.qty, ln.boxes = 0, []
+                continue
         if ln.absent and ln.speed:
             if q / ln.speed > config.SKIP_AFTER_DAYS:   # полный короб слишком велик — пробуем круглое число
                 q, box = config.round_qty(raw, [sz for _, sz in sizes], no_up)
