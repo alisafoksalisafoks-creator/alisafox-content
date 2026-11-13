@@ -1,0 +1,15 @@
+[Unit]
+Description=AlisaFox: бот поставок FBO
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=supplybot
+WorkingDirectory=/opt/supply-bot/src
+EnvironmentFile=/etc/supply-bot.env
+ExecStart=/opt/supply-bot/venv/bin/python -m supply_bot.app
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
