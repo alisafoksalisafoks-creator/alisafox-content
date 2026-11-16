@@ -145,6 +145,21 @@ def next_gap(cluster):
     return MOSCOW_NEXT_GAP if cluster in FAST_CLUSTERS else NEXT_SHIP_GAP
 
 
+# понедельник: хиты и «Частично» (и все остальные) с запасом от 28 дн ждут следующей отгрузки во всех кластерах
+# (16.11.2026, владелец: «зачем грузить сейчас 214?» — так она считала Москву, СПб, Ростов, Воронеж, Казань, Екб)
+MONDAY_WAIT_DAYS = 28
+TODAY_WEEKDAY = None      # ставит calc.build по дате расчёта
+# растущий хит (за последние 7 дн продали в 1,5+ раза больше, чем за 7 дн до этого, и +10 шт) — везём половину
+# расчёта и довозим через неделю (16.11.2026: Ростов OZ549 200 из 400, OZ647 170 из 310)
+GROW_RATIO = 1.5
+GROW_MIN_GAIN = 10
+GROW_SHARE = 0.5
+# товар, которого в кластере нет или почти нет (остаток + в пути меньше чем на неделю), при нехватке нашего склада
+# получает остаток раньше очереди кластеров (16.11.2026: OZ648 и OZ673 в Воронеж — бот отдал всё Ростову и Казани)
+EMPTY_DAYS = 7
+EMPTY_MIN14 = 10
+
+
 def need(sales14, have, k=None, cluster=None, partial=False):
     """Потребность кластера по логике владельца: запас от 30 дн — 0; иначе цель (40/45/50 дн) × скорость − (остаток + в пути).
 
@@ -153,6 +168,8 @@ def need(sales14, have, k=None, cluster=None, partial=False):
         return 0
     speed = sales14 / SALES_DAYS
     if have / speed >= trigger_days(sales14, cluster):
+        return 0
+    if TODAY_WEEKDAY == 0 and have / speed >= MONDAY_WAIT_DAYS:
         return 0
     target = TARGET_PARTIAL if partial else target_days(sales14, cluster)
     return max(0, math.ceil(target * speed - have))

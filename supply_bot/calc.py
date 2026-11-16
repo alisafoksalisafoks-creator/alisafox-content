@@ -254,6 +254,7 @@ def build(snap, overrides=None):
     overrides = overrides or {}
     today = snap.today
     plan = Plan(today=today, ship_date=next_ship_date(today))
+    config.TODAY_WEEKDAY = today.weekday()
     # сезон — месяц, когда поставка доедет и начнёт продаваться (в конце октября это уже ноябрь)
     month = (plan.ship_date + timedelta(days=config.LEAD_DEFAULT)).month
 
@@ -486,6 +487,16 @@ def build(snap, overrides=None):
             lines[(offer, cl)].flags.append(
                 f"товар кончился: за 14 дн продано {cur:.0f} шт, а за {nb} дн до этого {b:.0f} шт — "
                 f"спрос считаем по дням с остатком: {est:.0f} шт за 14 дн, везём до 35 дн (спрос не проверен)")
+        ln_ = lines[(offer, cl)]
+        if ln_.need and ln_.sales14 >= config.HIT_SALES14 and (offer, cl) not in oos:
+            by_day = cl_daily.get((offer, cl), {})
+            w1 = sum(by_day.get(str(today - timedelta(days=i)), 0) for i in range(7))
+            w2 = sum(by_day.get(str(today - timedelta(days=i)), 0) for i in range(7, 14))
+            if w1 >= config.GROW_RATIO * w2 and w1 - w2 >= config.GROW_MIN_GAIN:
+                half = math.ceil(ln_.need * config.GROW_SHARE)
+                ln_.flags.append(f"растущий хит: за 7 дн {w1:.0f} шт, за 7 дн до этого {w2:.0f} — везём половину "
+                                 f"расчёта ({half} из {ln_.need}), довезти в следующую отгрузку")
+                ln_.need = half
         if e.get("warn"):
             lines[(offer, cl)].warn = e["warn"][0]
             lines[(offer, cl)].flags.append(e["warn"][1])
@@ -958,6 +969,12 @@ def _order(ln, cl_sales):
     return (config.cluster_tier(ln.cluster), -cl_sales.get(ln.cluster, 0))
 
 
+def _empty(ln):
+    """В кластере товара нет (остаток + в пути меньше чем на EMPTY_DAYS дн), а продаётся он ходко."""
+    d = ln.sales14 / config.SALES_DAYS if ln.sales14 else 0
+    return ln.sales14 >= config.EMPTY_MIN14 and d and ln.have / d < config.EMPTY_DAYS
+
+
 def _level(group, free, cl_sales):
     """Нашего товара не хватает на все кластеры (решение владельца 02.11.2026).
 
@@ -968,6 +985,14 @@ def _level(group, free, cl_sales):
         ln.qty = 0
         ln.main = config.cluster_tier(ln.cluster) == 0
     rest = free
+    # сначала кластеры, где товара нет совсем (16.11.2026): ходовой товар с 0 везём раньше очереди
+    # не хватает на всех таких — делим пропорционально потребности (она делит остаток ФФ между кластерами сама)
+    empty = [ln for ln in group if _empty(ln)]
+    e_need = sum(ln.need for ln in empty)
+    for ln in empty:
+        ln.qty = ln.need if e_need <= rest else int(rest * ln.need / e_need)
+    rest -= sum(ln.qty for ln in empty)
+    group = [ln for ln in group if not _empty(ln)]
     tiers = defaultdict(list)
     for ln in group:
         tiers[config.cluster_tier(ln.cluster) if ln.main else (config.cluster_tier(ln.cluster), ln.cluster)].append(ln)
@@ -994,11 +1019,11 @@ def _fit(group, free, cl_sales):
         if not cand:
             over = sum(ln.qty for ln in group) - free
             # снимаем с кластера, который в очереди последний (СПб и Москва — последними)
-            ln = max((x for x in group if x.qty), key=lambda x: (_order(x, cl_sales), x.qty))
+            ln = max((x for x in group if x.qty), key=lambda x: (not _empty(x), _order(x, cl_sales), x.qty))
             ln.qty = max(0, ln.qty - over)
             continue
         # снимаем с кластера, который в очереди последний (СПб и Москва — последними), среди равных — с самого обеспеченного
-        ln = max(cand, key=lambda x: (_order(x, cl_sales), (x.have + x.qty) / x.speed if x.speed else 1e9))
+        ln = max(cand, key=lambda x: (not _empty(x), _order(x, cl_sales), (x.have + x.qty) / x.speed if x.speed else 1e9))
         name, s, k = min(ln.boxes, key=lambda b: b[1])
         ln.boxes = [(n, sz, c - 1 if (n, sz) == (name, s) else c) for n, sz, c in ln.boxes]
         ln.boxes = [b for b in ln.boxes if b[2] > 0]
