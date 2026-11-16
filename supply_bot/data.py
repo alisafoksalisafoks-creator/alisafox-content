@@ -24,7 +24,9 @@ def postings(oz, today, days=config.REF_DAYS, log=print):
     for i in range(days, -1, -1):   # с 09.11.2026 и сегодняшний день (i = 0), он всегда скачивается заново
         day = today - timedelta(days=i)
         path = cache / f"{day}.json"
-        if path.exists() and i > REFRESH_LAST_DAYS:
+        # файл, скачанный в тот же день (или в первые дни после), неполный — перекачиваем (12.11 остался с 85 шт вместо ~650)
+        fresh = path.exists() and datetime.fromtimestamp(path.stat().st_mtime, MSK).date() > day + timedelta(days=REFRESH_LAST_DAYS)
+        if fresh and i > REFRESH_LAST_DAYS:
             rows += [tuple(r) for r in json.loads(path.read_text())]
             continue
         log(f"Ozon: заказы FBO за {day:%d.%m}")
