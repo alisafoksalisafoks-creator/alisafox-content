@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+supply_bot/data/
+.pytest_cache/
