@@ -1,0 +1,16 @@
+[Unit]
+Description=AlisaFox YouGile Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/yougile-bot
+EnvironmentFile=/opt/yougile-bot/.env
+Environment=YG_BOT_DATA=/var/lib/yougile-bot
+ExecStart=/opt/yougile-bot/.venv/bin/python -m yougile_bot.app
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
