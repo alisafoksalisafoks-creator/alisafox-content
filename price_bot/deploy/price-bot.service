@@ -1,0 +1,17 @@
+[Unit]
+Description=AlisaFox Ozon prices Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/price-bot
+EnvironmentFile=/opt/price-bot/.env
+Environment=PRICE_BOT_DATA=/var/lib/price-bot
+ExecStart=/opt/price-bot/.venv/bin/python -m price_bot.app
+# упал — перезапуск через 10 секунд, без ограничения числа попыток
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
